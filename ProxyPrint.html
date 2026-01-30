@@ -1,0 +1,2439 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Proxy Printer (Pro Suite)</title>
+
+    <!-- Libraries -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Custom Styles -->
+    <style>
+        /* Card Preview Styles */
+        .card-preview {
+            width: 63px;
+            height: 88px;
+            object-fit: cover;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        /* Drag & Drop Zones */
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            transition: all 0.2s;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.drag-over {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+
+        .card-dragging {
+            opacity: 0.4;
+            border: 2px dashed #6366f1;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid white;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Form Element Tweaks */
+        textarea::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        textarea::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        textarea::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        textarea::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Hide Number Input Spinners */
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+
+        /* Checkbox Styling */
+        .card-checkbox:checked {
+            background-color: #4F46E5;
+            border-color: #4F46E5;
+        }
+
+        .tooltip-trigger:hover .tooltip-content {
+            display: block;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 min-h-screen p-4 md:p-8 text-gray-800 pb-24">
+
+    <div id="app" class="max-w-7xl mx-auto">
+
+        <!-- ================================================================== -->
+        <!--                            HEADER & TOOLBAR                        -->
+        <!-- ================================================================== -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-8 relative z-20">
+
+            <!-- Branding & File Operations -->
+            <div
+                class="px-6 py-3 border-b border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-50/50 rounded-t-xl">
+                <div>
+                    <h1 class="text-xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-indigo-600" fill="none"
+                            viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                        Proxy Printer
+                    </h1>
+                </div>
+                <!-- Project Management Buttons -->
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-400 mr-2 border-r pr-3 hidden sm:inline">{{
+                        settings.paperSize.toUpperCase() }} • {{ settings.cardWidth }}x{{ settings.cardHeight
+                        }}mm</span>
+                    <button @click="saveProject"
+                        class="text-xs font-medium text-gray-600 hover:text-blue-600 px-3 py-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200 transition-all flex items-center gap-1.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                        </svg>
+                        Save
+                    </button>
+                    <button @click="$refs.projectInput.click()"
+                        class="text-xs font-medium text-gray-600 hover:text-blue-600 px-3 py-1.5 rounded-md hover:bg-white border border-transparent hover:border-gray-200 transition-all flex items-center gap-1.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Load
+                    </button>
+                    <input type="file" ref="projectInput" accept=".json" class="hidden" @change="loadProject">
+                </div>
+            </div>
+
+            <!-- Main Action Bar -->
+            <div class="p-4 flex flex-col xl:flex-row gap-4 justify-between items-center">
+                <!-- Left: Deck Management -->
+                <div class="flex flex-wrap justify-center xl:justify-start gap-2 w-full xl:w-auto">
+                    <button @click="openDeckEditor"
+                        class="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 font-semibold rounded-lg transition-colors border border-indigo-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Edit Deck
+                    </button>
+                    <button @click="fetchAllTokens" :disabled="isFetchingTokens"
+                        class="flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-gray-200 disabled:opacity-50">
+                        <div v-if="isFetchingTokens" class="spinner border-gray-400 border-t-gray-700 w-4 h-4"></div>
+                        <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span class="hidden lg:inline">Tokens</span>
+                    </button>
+
+                    <!-- Sorting Dropdown -->
+                    <div class="relative z-30">
+                        <button @click="showSortMenu = !showSortMenu"
+                            class="flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-gray-200">
+                            <!-- Arrow flips vertically to indicate direction -->
+                            <svg :class="{'scale-y-[-1]': sortState.order === 'desc'}"
+                                class="h-5 w-5 transition-transform duration-200" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+                            </svg>
+                            <span>Sort</span>
+                        </button>
+                        <!-- Click Outside Overlay -->
+                        <div v-if="showSortMenu" class="fixed inset-0 z-30 cursor-default"
+                            @click="showSortMenu = false"></div>
+                        <!-- Sort Menu Items -->
+                        <div v-if="showSortMenu"
+                            class="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-xl border border-gray-100 z-40 overflow-hidden">
+                            <button @click="sortCards('name')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Name (A-Z)</button>
+                            <button @click="sortCards('color')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Color (WUBRG)</button>
+                            <button @click="sortCards('cmc')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Mana Value
+                                (Low-High)</button>
+                            <button @click="sortCards('type')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Type</button>
+                            <button @click="sortCards('dfc')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">DFC First</button>
+                            <button @click="sortCards('tokens')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Cards First</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Print Actions -->
+                <div class="flex flex-wrap justify-center xl:justify-end items-center gap-3 w-full xl:w-auto">
+                    <!-- Duplex Toggle -->
+                    <label
+                        class="cursor-pointer flex items-center gap-2 bg-white border border-gray-200 px-3 py-2 rounded-lg hover:border-gray-300 transition-colors select-none"
+                        :class="{'opacity-50': !hasDFC}" title="Enable for double-sided printing">
+                        <span class="text-sm font-medium text-gray-600">Duplex</span>
+                        <div class="relative w-9 h-5 bg-gray-200 rounded-full transition-colors"
+                            :class="{'bg-green-500': globalDuplex && hasDFC}">
+                            <div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform shadow-sm"
+                                :class="{'translate-x-4': globalDuplex && hasDFC}"></div>
+                        </div>
+                        <input type="checkbox" v-model="globalDuplex" :disabled="!hasDFC" class="hidden">
+                    </label>
+
+                    <button @click="showSettingsModal = true"
+                        class="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors border border-transparent hover:border-gray-200"
+                        title="Print Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+
+                    <div class="w-px h-8 bg-gray-200 mx-1 hidden sm:block"></div>
+
+                    <!-- Generate & Preview Buttons -->
+                    <button @click="openPreview" :disabled="cards.length === 0"
+                        class="flex items-center gap-2 px-5 py-2.5 bg-white text-purple-700 border border-purple-200 hover:bg-purple-50 hover:border-purple-300 font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        <span class="hidden lg:inline">Preview</span>
+                        <span class="lg:hidden">View</span>
+                    </button>
+
+                    <button @click="generatePDF" :disabled="cards.length === 0 || isGenerating"
+                        class="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                        <div v-if="isGenerating" class="spinner w-5 h-5"></div>
+                        <span v-else>Download PDF</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================================================================== -->
+        <!--                            STATUS MESSAGES                         -->
+        <!-- ================================================================== -->
+        <div v-if="statusMessage"
+            class="bg-blue-50 border-l-4 border-blue-500 text-blue-700 p-4 mb-6 rounded shadow-sm flex justify-between items-center transition-all">
+            <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                        clip-rule="evenodd" />
+                </svg>
+                <p>{{ statusMessage }}</p>
+            </div>
+            <button @click="statusMessage = ''" class="text-blue-500 hover:text-blue-700 font-bold">&times;</button>
+        </div>
+
+        <div v-if="errorMessage"
+            class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded shadow-sm flex justify-between items-center animate-pulse">
+            <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd"
+                        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                        clip-rule="evenodd" />
+                </svg>
+                <p>{{ errorMessage }}</p>
+            </div>
+            <button @click="errorMessage = ''" class="text-red-500 hover:text-red-700 font-bold">&times;</button>
+        </div>
+
+        <!-- Drag File Overlay -->
+        <Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0"
+            enter-to-class="opacity-100" leave-active-class="transition duration-150 ease-in"
+            leave-from-class="opacity-100" leave-to-class="opacity-0">
+            <div v-if="isDraggingFile && !showVersionModal"
+                class="fixed inset-0 z-50 bg-blue-500 bg-opacity-10 backdrop-blur-sm border-4 border-blue-400 border-dashed m-4 rounded-xl flex items-center justify-center pointer-events-none">
+                <div class="bg-white p-8 rounded-2xl shadow-xl flex flex-col items-center animate-bounce">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-blue-500 mb-4" fill="none"
+                        viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <h3 class="text-2xl font-bold text-gray-800">Drop files to Import</h3>
+                    <p class="text-gray-500">Auto-identifies Magic cards by filename</p>
+                </div>
+            </div>
+        </Transition>
+
+        <!-- ================================================================== -->
+        <!--                            MAIN CONTENT GRID                       -->
+        <!-- ================================================================== -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <div class="lg:col-span-4 space-y-6">
+
+                <!-- File Drop Zone -->
+                <div class="drop-zone bg-white rounded-xl p-6 text-center cursor-pointer relative border-2 border-dashed border-gray-300 hover:border-blue-400"
+                    @click="$refs.fileInput.click()">
+                    <input type="file" ref="fileInput" multiple accept="image/*" class="hidden"
+                        @change="handleFileSelect">
+                    <div class="flex flex-col md:flex-row items-center justify-center gap-4 text-gray-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-gray-400" fill="none"
+                            viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <div class="text-left">
+                            <p class="font-medium text-gray-700">Add Local Images (or paste Ctrl+V)</p>
+                            <p class="text-xs">Drag & drop image files anywhere</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Deck List Grid -->
+                <div v-if="cards.length > 0"
+                    class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+                    <div class="flex justify-between items-center p-4 border-b bg-gray-50 sticky top-0 z-10">
+                        <div class="flex items-center gap-3">
+                            <h2 class="font-semibold text-gray-700 flex items-center gap-2"><span>Active
+                                    Deck</span><span
+                                    class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full">{{ totalCards }}
+                                    cards</span></h2>
+                            <label
+                                class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer hover:text-gray-900 select-none">
+                                <input type="checkbox" :checked="allSelected" @change="toggleSelectAll"
+                                    class="rounded text-indigo-600 focus:ring-indigo-500"> Select All
+                            </label>
+                        </div>
+                        <button @click="confirmClear"
+                            class="text-red-500 hover:text-red-700 text-sm font-medium flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg> Clear All
+                        </button>
+                    </div>
+
+                    <!-- Card Grid -->
+                    <div class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                        <div v-for="(card, index) in cards" :key="index"
+                            class="flex flex-col bg-white border rounded-lg hover:shadow-md transition-shadow duration-200 overflow-hidden group"
+                            :class="{'ring-2 ring-indigo-500': card.selected, 'opacity-40': draggedCardIndex === index}"
+                            draggable="true" @dragstart="onCardDragStart($event, index)" @dragend="onCardDragEnd"
+                            @drop.stop="onCardDrop($event, index)" @dragover.prevent @dragenter.prevent>
+                            <!-- Card Image Area -->
+                            <div class="relative h-48 bg-gray-100 flex items-center justify-center overflow-hidden cursor-zoom-in"
+                                @click="previewImage = (card.showBack && card.backSrc) ? card.backSrc : card.src">
+                                <img :src="(card.showBack && card.backSrc) ? card.backSrc : card.src"
+                                    class="w-full h-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
+                                    loading="lazy">
+                                <div class="absolute top-2 left-2 z-20" @click.stop><input type="checkbox"
+                                        v-model="card.selected"
+                                        class="card-checkbox h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shadow-sm">
+                                </div>
+                                <button v-if="card.backSrc" @click.stop="card.showBack = !card.showBack"
+                                    class="absolute top-2 right-2 bg-black bg-opacity-50 hover:bg-opacity-70 text-white p-1 rounded-full backdrop-blur-sm transition-all z-10"
+                                    title="Swap Face">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none"
+                                        viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <!-- Card Info & Controls -->
+                            <div class="p-3 border-t bg-gray-50 flex-1 flex flex-col justify-between cursor-pointer hover:bg-gray-100 transition-colors"
+                                @click="openVersionSelector(index)">
+                                <div class="mb-2">
+                                    <div class="flex items-start justify-between gap-1">
+                                        <p class="text-sm font-bold text-gray-800 leading-tight truncate flex-1"
+                                            :title="card.name">{{ card.name }}</p>
+                                        <a v-if="scryfallIcon && card.set !== 'Local' && card.set !== 'CUST'"
+                                            :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
+                                            target="_blank" @click.stop
+                                            class="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                                            title="View on Scryfall"><img :src="scryfallIcon"
+                                                class="w-4 h-4 rounded-full"></a>
+                                    </div>
+                                    <p class="text-xs text-gray-500 flex items-center gap-1 mt-1">
+                                        <button v-if="card.set !== 'Local'"
+                                            class="bg-gray-200 hover:bg-blue-100 hover:text-blue-800 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider text-gray-600 transition-colors cursor-pointer border border-transparent hover:border-blue-200"
+                                            title="Change Version" @click.stop="openVersionSelector(index)">{{ card.set
+                                            }}</button>
+                                        <span v-else
+                                            class="bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider cursor-pointer">FILE</span>
+                                        <span v-if="card.cn" class="text-gray-400 text-[10px]">#{{ card.cn }}</span>
+                                        <span v-if="card.lang && card.lang !== 'en'"
+                                            class="bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border border-yellow-200">[{{
+                                            card.lang }}]</span>
+                                    </p>
+                                </div>
+
+                                <div v-if="card.backSrc || card.dfcData"
+                                    class="flex items-center gap-2 mb-2 bg-blue-50 p-1.5 rounded border border-blue-100 min-h-[30px]"
+                                    @click.stop>
+                                    <div v-if="globalDuplex && card.backSrc"
+                                        class="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-green-700 bg-green-100 rounded py-1 px-2 border border-green-200">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none"
+                                            viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                        </svg>Auto-Back
+                                    </div>
+                                    <button v-else-if="card.dfcData && !card.backSrc" @click.stop="restoreDFC(index)"
+                                        class="flex-1 text-[10px] font-semibold text-green-700 hover:bg-green-100 rounded py-1 flex items-center justify-center gap-1"
+                                        title="Restore"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3"
+                                            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>Restore</button>
+                                    <button v-else-if="card.backSrc && !globalDuplex" @click.stop="splitCard(index)"
+                                        class="flex-1 text-[10px] font-semibold text-blue-700 hover:bg-blue-100 rounded py-1 flex items-center justify-center gap-1"
+                                        title="Split"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3"
+                                            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+                                        </svg>Split</button>
+                                </div>
+
+                                <div class="flex items-center justify-between" @click.stop>
+                                    <div
+                                        class="flex items-center border border-gray-300 rounded-md overflow-hidden bg-white shadow-sm">
+                                        <button @click.stop="card.qty = Math.max(1, card.qty - 1)"
+                                            class="px-2 py-1 hover:bg-gray-100 text-gray-600 border-r active:bg-gray-200">-</button>
+                                        <input type="number" v-model.number="card.qty"
+                                            class="w-10 text-center text-sm font-semibold p-1 focus:outline-none"
+                                            min="1" @click.stop>
+                                        <button @click.stop="card.qty++"
+                                            class="px-2 py-1 hover:bg-gray-100 text-gray-600 border-l active:bg-gray-200">+</button>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <button @click.stop="fetchTokensForCard(index)"
+                                            class="text-gray-400 hover:text-indigo-600 p-1.5 rounded-full hover:bg-indigo-50 transition-colors"><svg
+                                                xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+                                                viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                    d="M12 4v16m8-8H4" />
+                                            </svg></button>
+                                        <button @click.stop="removeCard(index)"
+                                            class="text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-red-50 transition-colors"><svg
+                                                xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none"
+                                                viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                    d="M6 18L18 6M6 6l12 12" />
+                                            </svg></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================================================================== -->
+        <!--                            FLOATING ACTION BAR                     -->
+        <!-- ================================================================== -->
+        <Transition enter-active-class="transform transition ease-out duration-300"
+            enter-from-class="translate-y-full opacity-0" enter-to-class="translate-y-0 opacity-100"
+            leave-active-class="transform transition ease-in duration-200" leave-from-class="translate-y-0 opacity-100"
+            leave-to-class="translate-y-full opacity-0">
+            <div v-if="selectedCount > 0"
+                class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white rounded-full shadow-2xl border border-gray-200 px-6 py-3 flex items-center gap-4 z-40 whitespace-nowrap overflow-visible">
+                <span class="font-bold text-gray-700 whitespace-nowrap">{{ selectedCount }} selected</span>
+                <div class="h-6 w-px bg-gray-300"></div>
+
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500 font-medium uppercase">Set Qty:</span>
+                    <button @click="setMassQty(1)"
+                        class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-sm font-bold flex items-center justify-center transition-colors">1</button>
+                    <button @click="setMassQty(4)"
+                        class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-sm font-bold flex items-center justify-center transition-colors">4</button>
+                </div>
+
+                <div class="h-6 w-px bg-gray-300"></div>
+
+                <div class="relative group">
+                    <button
+                        class="flex items-center gap-1 text-sm font-medium text-gray-700 hover:text-indigo-600 transition-colors whitespace-nowrap"><svg
+                            xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                        </svg>Set Language</button>
+                    <div class="absolute bottom-full left-0 mb-0 pb-4 w-32 hidden group-hover:block z-50">
+                        <div class="bg-white rounded-lg shadow-xl border border-gray-100 overflow-hidden">
+                            <button @click="massChangeLanguage('en')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">English</button>
+                            <button @click="massChangeLanguage('ja')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Japanese</button>
+                            <button @click="massChangeLanguage('ko')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Korean</button>
+                            <button @click="massChangeLanguage('ru')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Russian</button>
+                            <button @click="massChangeLanguage('de')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">German</button>
+                            <button @click="massChangeLanguage('fr')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">French</button>
+                            <button @click="massChangeLanguage('it')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Italian</button>
+                            <button @click="massChangeLanguage('pt')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Portuguese</button>
+                            <button @click="massChangeLanguage('es')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Spanish</button>
+                            <button @click="massChangeLanguage('zhs')"
+                                class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Chinese (S)</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="h-6 w-px bg-gray-300"></div>
+                <button @click="deleteSelected"
+                    class="text-red-600 hover:text-red-800 font-medium flex items-center gap-1"><svg
+                        xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg></button>
+                <button @click="deselectAll" class="text-gray-400 hover:text-gray-600"><svg
+                        xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg></button>
+            </div>
+        </Transition>
+
+        <!-- ================================================================== -->
+        <!--                            MODALS                                  -->
+        <!-- ================================================================== -->
+
+        <!-- 1. Version Selection Modal -->
+        <div v-if="showVersionModal"
+            class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
+            @mousedown="handleBackdropMouseDown" @click.self="handleBackdropClick(() => showVersionModal = false)">
+            <div
+                class="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col h-[85vh] transform transition-all scale-100 relative">
+                <!-- Drop Zone for Custom Art -->
+                <div v-if="isDraggingOverModal"
+                    class="absolute inset-0 bg-blue-500 bg-opacity-20 z-50 rounded-xl flex items-center justify-center border-4 border-blue-400 border-dashed pointer-events-none">
+                    <div class="bg-white p-6 rounded-xl shadow-lg">
+                        <p class="font-bold text-blue-600 text-lg">Drop to set custom art</p>
+                    </div>
+                </div>
+                <!-- Modal Header -->
+                <div
+                    class="p-6 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gray-50 rounded-t-xl gap-4">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full">
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-900">Select Version</h3>
+                            <p class="text-sm text-gray-500 mt-1">Choose a printing.</p>
+                        </div>
+                        <div class="flex-1 w-full sm:w-auto relative flex gap-2 items-center">
+                            <!-- Search Bar -->
+                            <div class="relative flex-1">
+                                <input type="text" v-model="versionSearchQuery"
+                                    placeholder="Search (set:lea, frame:old...)"
+                                    class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+                                <svg xmlns="http://www.w3.org/2000/svg"
+                                    class="h-4 w-4 text-gray-400 absolute left-3 top-2.5" fill="none"
+                                    viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </div>
+                            <!-- Lang Selector -->
+                            <select v-model="versionLang" @change="onVersionLangChange"
+                                class="border rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white min-w-[100px]">
+                                <option value="en">English</option>
+                                <option value="ja">Japanese</option>
+                                <option value="ko">Korean</option>
+                                <option value="ru">Russian</option>
+                                <option value="zhs">Chinese (S)</option>
+                                <option value="zht">Chinese (T)</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="it">Italian</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="es">Spanish</option>
+                                <option value="ph">Phyrexian</option>
+                            </select>
+                            <!-- Search Help -->
+                            <div class="tooltip-trigger relative">
+                                <button @click="showSearchHelp = !showSearchHelp"
+                                    class="w-8 h-8 rounded-full border border-gray-300 text-gray-500 flex items-center justify-center hover:bg-gray-100 hover:text-indigo-600 transition-colors"><span
+                                        class="font-bold text-sm">?</span></button>
+                                <div v-if="showSearchHelp"
+                                    class="absolute top-10 right-0 z-50 w-72 bg-white rounded-lg shadow-xl border border-gray-200 p-4 text-sm text-gray-600 leading-relaxed"
+                                    @click.stop>
+                                    <div class="flex justify-between items-center mb-2">
+                                        <h4 class="font-bold text-gray-900">Search Options</h4><button
+                                            @click="showSearchHelp = false"
+                                            class="text-gray-400 hover:text-gray-600">&times;</button>
+                                    </div>
+                                    <ul class="space-y-1">
+                                        <li><code class="bg-gray-100 px-1 rounded">set:lea</code> (Set Code)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">year:1995</code> (Release Year)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">frame:old</code> (Old Frame)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">border:black</code> (Border Color)
+                                        </li>
+                                        <li><code class="bg-gray-100 px-1 rounded">artist:guay</code> (Artist Name)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">is:fullart</code> (Full Art)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">is:textless</code> (Textless)</li>
+                                        <li><code class="bg-gray-100 px-1 rounded">-set:sld</code> (Negate)</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <button v-if="versionList.some(v => v.backPreviewSrc)"
+                            @click="versionShowBack = !versionShowBack"
+                            class="ml-auto sm:ml-0 text-xs font-bold bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg border border-indigo-100 hover:bg-indigo-100 hover:text-indigo-800 transition-colors flex items-center gap-2 whitespace-nowrap">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                            </svg>{{ versionShowBack ? 'Backs' : 'Fronts' }}
+                        </button>
+                        <button @click="$refs.customVersionInput.click()"
+                            class="text-xs font-bold bg-gray-100 text-gray-700 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-200 transition-colors flex items-center gap-2 whitespace-nowrap"><svg
+                                xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>Upload</button>
+                        <input type="file" ref="customVersionInput" accept="image/*" class="hidden"
+                            @change="handleCustomVersionUpload">
+                    </div>
+                    <button @click="showVersionModal = false"
+                        class="text-gray-400 hover:text-gray-600 absolute top-4 right-4 sm:static"><svg
+                            xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12" />
+                        </svg></button>
+                </div>
+                <!-- Modal Body -->
+                <div class="flex-1 overflow-y-auto p-6 bg-gray-50" @dragover.prevent="isDraggingOverModal = true"
+                    @dragleave="isDraggingOverModal = false" @drop.prevent="handleVersionDrop">
+                    <div v-if="filteredVersions.length === 0 && !isFetchingVersions"
+                        class="flex flex-col items-center justify-center h-full text-gray-500">
+                        <p class="mb-2">No versions match your search.</p>
+                        <p v-if="versionLang !== 'en'" class="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                            No cards found in {{ versionLang.toUpperCase() }}.</p>
+                    </div>
+                    <div v-if="filteredVersions.length > 0"
+                        class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                        <div v-for="ver in filteredVersions" :key="ver.id" @click="selectVersion(ver)"
+                            class="cursor-pointer group flex flex-col gap-2">
+                            <div
+                                class="relative bg-white rounded-lg shadow-sm group-hover:shadow-md transition-shadow overflow-hidden border border-gray-200 group-hover:border-blue-400 aspect-[63/88]">
+                                <img :src="versionShowBack && ver.backPreviewSrc ? ver.backPreviewSrc : ver.previewSrc"
+                                    class="w-full h-full object-contain" loading="lazy">
+                                <div
+                                    class="absolute inset-0 bg-blue-500 bg-opacity-0 group-hover:bg-opacity-10 transition-all">
+                                </div>
+                                <div v-if="ver.full_art || ver.textless"
+                                    class="absolute bottom-1 right-1 flex flex-col gap-1 items-end">
+                                    <span v-if="ver.full_art"
+                                        class="bg-black/70 text-white text-[9px] px-1 rounded">Full Art</span>
+                                    <span v-if="ver.textless"
+                                        class="bg-black/70 text-white text-[9px] px-1 rounded">Textless</span>
+                                </div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-xs font-bold text-gray-700 truncate px-1">{{ ver.set }} #{{ ver.cn }}
+                                </div>
+                                <div class="text-[10px] text-gray-500 truncate px-1" :title="ver.setName">{{ ver.setName
+                                    }}</div>
+                                <div class="text-[10px] text-gray-400">{{ ver.year }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="isFetchingVersions" class="py-8 flex flex-col items-center justify-center text-gray-500">
+                        <div class="spinner border-gray-300 border-t-blue-600 w-8 h-8 mb-4"></div>
+                        <p>Loading more versions...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Import / Deck Editor Modal -->
+        <div v-if="showImportModal"
+            class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
+            @mousedown="handleBackdropMouseDown" @click.self="handleBackdropClick(() => showImportModal = false)">
+            <div
+                class="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col h-[85vh] transform transition-all scale-100">
+                <div class="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <div>
+                        <h3 class="text-xl font-bold text-gray-900">Deck Editor</h3>
+                        <p class="text-sm text-gray-500 mt-1">Edit your list below. Local files are preserved.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button @click="importText = ''"
+                            class="text-xs text-gray-500 hover:text-red-500 font-medium px-2 py-1 rounded hover:bg-gray-100 transition-colors">Clear</button>
+                        <button @click="copyDecklist"
+                            class="text-xs text-gray-500 hover:text-blue-500 font-medium px-2 py-1 rounded hover:bg-gray-100 transition-colors">Copy</button>
+                        <div class="h-4 w-px bg-gray-300 mx-1"></div>
+                        <button @click="showImportModal = false" class="text-gray-400 hover:text-gray-600"><svg
+                                xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12" />
+                            </svg></button>
+                    </div>
+                </div>
+                <div class="px-6 py-4 bg-gray-50 border-b flex gap-2">
+                    <input v-model="importUrl" @keyup.enter="importDeckFromURL" type="text"
+                        placeholder="Paste Moxfield URL"
+                        class="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <button @click="importDeckFromURL" :disabled="isFetchingUrl"
+                        class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-100 font-bold py-2 px-4 rounded-lg text-sm transition-colors flex items-center gap-2">
+                        <div v-if="isFetchingUrl" class="spinner border-gray-400 border-t-indigo-600 w-3 h-3"></div>
+                        <span>Import URL</span>
+                    </button>
+                </div>
+                <div class="flex-1 overflow-hidden flex flex-col p-0 relative">
+                    <div v-if="importErrors.length > 0"
+                        class="absolute top-4 left-4 right-4 z-10 p-3 bg-red-50 border border-red-200 rounded-lg shadow-sm text-sm text-red-800 flex flex-col gap-1 max-h-32 overflow-y-auto">
+                        <div class="flex justify-between items-center font-bold"><span>Could not find {{
+                                importErrors.length }} card(s):</span><button @click="importErrors = []"
+                                class="text-red-500 hover:text-red-700">&times;</button></div>
+                        <ul class="list-disc list-inside text-xs space-y-0.5">
+                            <li v-for="err in importErrors" :key="err" class="truncate">{{ err }}</li>
+                        </ul>
+                    </div>
+                    <textarea v-model="importText"
+                        class="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none focus:bg-blue-50/30 transition-colors leading-relaxed"
+                        placeholder="4 Brainstorm (CNS) 91&#10;1 Flooded Strand (KTK) 233&#10;1x Sol Ring"
+                        @keydown.ctrl.enter.prevent="processImport"
+                        @keydown.meta.enter.prevent="processImport"></textarea>
+                    <div v-if="importStatus"
+                        class="absolute bottom-4 left-6 right-6 p-3 bg-indigo-50 text-indigo-700 rounded-lg text-sm flex items-center gap-3 shadow-sm border border-indigo-100">
+                        <div v-if="isImporting" class="spinner border-indigo-300 border-t-indigo-700 w-4 h-4"></div>
+                        <span class="font-medium">{{ importStatus }}</span>
+                    </div>
+                </div>
+                <div class="p-5 border-t bg-gray-50 rounded-b-xl flex justify-between items-center">
+                    <div class="flex items-center gap-4">
+                        <div class="text-xs text-gray-500 flex items-center gap-2"><span
+                                class="font-bold bg-gray-200 text-gray-700 px-2 py-0.5 rounded">{{ detectedCardCount
+                                }}</span>cards detected</div>
+                    </div>
+                    <div class="flex gap-3">
+                        <button @click="showImportModal = false"
+                            class="px-5 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded-lg transition-colors">Cancel</button>
+                        <button @click="processImport" :disabled="isImporting"
+                            class="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-2"><span>{{
+                                isImporting ? 'Syncing...' : 'Sync Deck' }}</span><svg v-if="!isImporting"
+                                xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. Settings Modal -->
+        <div v-if="showSettingsModal"
+            class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
+            @mousedown="handleBackdropMouseDown" @click.self="handleBackdropClick(() => showSettingsModal = false)">
+            <div
+                class="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col transform transition-all scale-100">
+                <div class="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <h3 class="text-xl font-bold text-gray-900">Print Settings</h3>
+                    <button @click="showSettingsModal = false" class="text-gray-400 hover:text-gray-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+                            stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="p-6 space-y-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Paper Format</label>
+                        <div class="flex gap-4">
+                            <label class="flex-1 cursor-pointer"><input type="radio" v-model="settings.paperSize"
+                                    value="a4" class="sr-only peer">
+                                <div
+                                    class="border rounded-lg p-3 text-center peer-checked:bg-blue-50 peer-checked:border-blue-500 hover:bg-gray-50 transition-all">
+                                    <div class="font-bold text-gray-800">A4</div>
+                                    <div class="text-xs text-gray-500">210 x 297 mm</div>
+                                </div>
+                            </label>
+                            <label class="flex-1 cursor-pointer"><input type="radio" v-model="settings.paperSize"
+                                    value="letter" class="sr-only peer">
+                                <div
+                                    class="border rounded-lg p-3 text-center peer-checked:bg-blue-50 peer-checked:border-blue-500 hover:bg-gray-50 transition-all">
+                                    <div class="font-bold text-gray-800">US Letter</div>
+                                    <div class="text-xs text-gray-500">8.5 x 11 in</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Card Standard</label>
+                        <select v-model="settings.cardPreset"
+                            class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none mb-3">
+                            <option value="standard">Standard (Magic/Pokemon) - 63x88mm</option>
+                            <option value="yugioh">Japanese (Yu-Gi-Oh) - 59x86mm</option>
+                            <option value="mini_us">Mini American - 41x63mm</option>
+                            <option value="mini_eu">Mini European - 44x68mm</option>
+                            <option value="tarot">Tarot - 70x120mm</option>
+                            <option value="custom">Custom Dimensions...</option>
+                        </select>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div><label class="block text-xs font-medium text-gray-500 mb-1">Width (mm)</label><input
+                                    type="number" v-model.number="settings.cardWidth"
+                                    :disabled="settings.cardPreset !== 'custom'"
+                                    class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400">
+                            </div>
+                            <div><label class="block text-xs font-medium text-gray-500 mb-1">Height (mm)</label><input
+                                    type="number" v-model.number="settings.cardHeight"
+                                    :disabled="settings.cardPreset !== 'custom'"
+                                    class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-sm font-medium text-gray-700 mb-1">Scaling (%)</label>
+                            <div class="relative"><input type="number" v-model.number="settings.cardScale" step="1"
+                                    min="10" max="200"
+                                    class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none pr-8"><span
+                                    class="absolute right-3 top-2 text-gray-400 text-xs">%</span></div>
+                        </div>
+                        <div><label class="block text-sm font-medium text-gray-700 mb-1">Gap Size (mm)</label><input
+                                type="number" v-model.number="settings.gapSize" step="0.1" min="0"
+                                class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-sm font-medium text-gray-700 mb-1">Bleed (mm)</label><input
+                                type="number" v-model.number="settings.bleedMm" step="0.5" min="0"
+                                class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                            <p class="text-[10px] text-gray-400 mt-1">Extends image past cut line.</p>
+                        </div>
+                        <div class="flex items-end"><label class="flex items-center gap-2 cursor-pointer pb-2"><input
+                                    type="checkbox" v-model="settings.proxyMarker"
+                                    class="rounded text-blue-600 focus:ring-blue-500"><span
+                                    class="text-sm text-gray-700">Print 'PROXY' Marker</span></label></div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-sm font-medium text-gray-700 mb-1">Background Fill</label><select
+                                v-model="settings.pageBg"
+                                class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                <option value="white">White</option>
+                                <option value="black">Black (Fill corners)</option>
+                            </select></div>
+                        <div><label class="block text-sm font-medium text-gray-700 mb-1">Cutting Guides</label><select
+                                v-model="settings.cutMarks"
+                                class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                <option value="none">None</option>
+                                <option value="lines">Solid Lines</option>
+                                <option value="dotted">Dotted Lines</option>
+                                <option value="crosshairs">Crop Marks</option>
+                            </select></div>
+                    </div>
+                </div>
+                <div class="p-6 border-t bg-gray-50 rounded-b-xl flex justify-end"><button
+                        @click="showSettingsModal = false"
+                        class="px-5 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors">Done</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. Preview Modal -->
+        <div v-if="showPreviewModal"
+            class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
+            @mousedown="handleBackdropMouseDown" @click.self="handleBackdropClick(() => showPreviewModal = false)">
+            <div class="bg-gray-100 rounded-xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
+                <div class="p-4 bg-white border-b flex justify-between items-center">
+                    <h3 class="text-xl font-bold text-gray-900">Layout Preview</h3>
+                    <div class="flex items-center gap-4"><span class="text-sm text-gray-500">Note: Low-res preview.
+                            Actual PDF is high quality.</span><button @click="showPreviewModal = false"
+                            class="text-gray-400 hover:text-gray-600"><svg xmlns="http://www.w3.org/2000/svg"
+                                class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12" />
+                            </svg></button></div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-8 flex flex-wrap justify-center gap-8 bg-gray-200">
+                    <div v-for="(page, idx) in previewPages" :key="idx"
+                        class="bg-white shadow-lg relative transition-transform hover:scale-[1.02]"
+                        :style="{ width: page.w + 'px', height: page.h + 'px' }">
+                        <div class="absolute top-0 left-0 bg-gray-800 text-white text-xs px-2 py-1 rounded-br">Page {{
+                            idx + 1 }}</div>
+                        <div v-for="item in page.items" :key="item.i"
+                            class="absolute bg-gray-100 overflow-hidden border border-gray-200"
+                            :style="{ left: item.x + 'px', top: item.y + 'px', width: item.w + 'px', height: item.h + 'px' }">
+                            <img :src="item.src" class="w-full h-full object-cover">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden Canvas for Processing -->
+        <canvas ref="procCanvas" class="hidden"></canvas>
+
+    </div>
+
+    <!-- ================================================================== -->
+    <!--                            APPLICATION LOGIC                       -->
+    <!-- ================================================================== -->
+    <script>
+        const { createApp } = Vue;
+        const { jsPDF } = window.jspdf;
+
+        // --- CONSTANTS ---
+        const DB_NAME = 'MTGProxyPrinterDB';
+        const STORE_NAME = 'appState';
+        const PAPER_SIZES = {
+            a4: { w: 210, h: 297 },
+            letter: { w: 215.9, h: 279.4 }
+        };
+
+        // --- HELPER: IndexedDB Persistence ---
+        const saveToDB = (data) => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, 1);
+                request.onupgradeneeded = (e) => { e.target.result.createObjectStore(STORE_NAME); };
+                request.onsuccess = (e) => {
+                    const db = e.target.result;
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    tx.objectStore(STORE_NAME).put(data, 'currentSession');
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        };
+        const loadFromDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, 1);
+                request.onupgradeneeded = (e) => { e.target.result.createObjectStore(STORE_NAME); };
+                request.onsuccess = (e) => {
+                    const db = e.target.result;
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const req = tx.objectStore(STORE_NAME).get('currentSession');
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        };
+
+        createApp({
+            data() {
+                return {
+                    // Deck State
+                    cards: [],
+                    globalDuplex: false,
+
+                    // App State
+                    isGenerating: false,
+                    isFetchingTokens: false,
+                    statusMessage: '',
+                    errorMessage: '',
+
+                    // Modals
+                    showImportModal: false,
+                    showVersionModal: false,
+                    showSettingsModal: false,
+                    showPreviewModal: false,
+                    showSortMenu: false,
+                    showSearchHelp: false,
+
+                    // Import Logic
+                    importText: '',
+                    importUrl: '',
+                    isFetchingUrl: false,
+                    isImporting: false,
+                    importStatus: '',
+                    importErrors: [],
+
+                    // Version Selector
+                    activeCardIndex: null,
+                    isFetchingVersions: false,
+                    versionList: [],
+                    versionSearchQuery: '',
+                    versionLang: 'en',
+                    versionShowBack: false,
+                    isDraggingOverModal: false,
+
+                    // Drag & Drop
+                    isDraggingFile: false,
+                    draggedCardIndex: null,
+                    previewImage: null,
+
+                    // Settings
+                    settings: {
+                        paperSize: 'a4', cardPreset: 'standard', cardWidth: 63, cardHeight: 88, cardScale: 100,
+                        gapSize: 0, cutMarks: 'lines', pageBg: 'white', bleedMm: 0, proxyMarker: false
+                    },
+
+                    // Cache & Preferences
+                    versionCache: new Map(),
+                    preferredVersions: {},
+                    scryfallIcon: null,
+                    sortState: { key: '', order: 'asc' },
+                    previewPages: [],
+                    backdropInteract: false
+                }
+            },
+            computed: {
+                totalCards() { return this.cards.reduce((sum, card) => sum + card.qty, 0); },
+                selectedCount() { return this.cards.filter(c => c.selected).length; },
+                allSelected() { return this.cards.length > 0 && this.cards.every(c => c.selected); },
+                detectedCardCount() {
+                    if (!this.importText) return 0;
+                    const lines = this.importText.split('\n').filter(l => l.trim().length > 0 && !l.startsWith('//') && !l.startsWith('#'));
+                    return lines.length;
+                },
+                hasDFC() { return this.cards.some(c => c.backSrc); },
+                // Filters versions in the modal based on search query
+                filteredVersions() {
+                    if (!this.versionSearchQuery) return this.versionList;
+                    const queryParts = this.versionSearchQuery.toLowerCase().split(/\s+/);
+                    return this.versionList.filter(ver => {
+                        if (ver.id === 'custom-current') return true;
+                        return queryParts.every(part => {
+                            let isNegative = false, term = part;
+                            if (term.startsWith('-')) { isNegative = true; term = term.substring(1); }
+                            let match = false;
+
+                            // Handle advanced syntax (set:abc, frame:old)
+                            if (term.includes(':')) {
+                                const [key, val] = term.split(':');
+                                if (!val) return true;
+                                switch (key) {
+                                    case 'year': match = ver.year.includes(val); break;
+                                    case 'set': case 's': match = ver.set.toLowerCase().includes(val) || ver.setName.toLowerCase().includes(val); break;
+                                    case 'frame': match = ver.frame && ver.frame.includes(val); break;
+                                    case 'border': match = ver.border && ver.border.includes(val); break;
+                                    case 'game': match = ver.games && ver.games.includes(val); break;
+                                    case 'artist': case 'a': match = ver.artist && ver.artist.toLowerCase().includes(val); break;
+                                    case 'is':
+                                        if (val === 'fullart') match = ver.full_art;
+                                        else if (val === 'textless') match = ver.textless;
+                                        break;
+                                    case 'not':
+                                        if (val === 'fullart') match = !ver.full_art;
+                                        else if (val === 'textless') match = !ver.textless;
+                                        break;
+                                    default: match = true;
+                                }
+                            } else {
+                                match = (ver.set.toLowerCase().includes(term) || ver.setName.toLowerCase().includes(term) || (ver.artist && ver.artist.toLowerCase().includes(term)) || ver.year.includes(term));
+                            }
+                            return isNegative ? !match : match;
+                        });
+                    });
+                }
+            },
+            watch: {
+                cards: { handler(newCards) { this.saveSession(); }, deep: true },
+                globalDuplex() { this.saveSession(); },
+                settings: {
+                    handler(newVal) {
+                        // Auto-set dimensions based on presets
+                        if (newVal.cardPreset === 'standard') { newVal.cardWidth = 63; newVal.cardHeight = 88; }
+                        else if (newVal.cardPreset === 'yugioh') { newVal.cardWidth = 59; newVal.cardHeight = 86; }
+                        else if (newVal.cardPreset === 'mini_us') { newVal.cardWidth = 41; newVal.cardHeight = 63; }
+                        else if (newVal.cardPreset === 'mini_eu') { newVal.cardWidth = 44; newVal.cardHeight = 68; }
+                        else if (newVal.cardPreset === 'tarot') { newVal.cardWidth = 70; newVal.cardHeight = 120; }
+                        this.saveSession();
+                    },
+                    deep: true
+                }
+            },
+            mounted() {
+                this.loadSession();
+                window.addEventListener('keydown', this.handleKeydown);
+                // Drag and drop listeners
+                window.addEventListener('dragenter', this.onDragEnter);
+                window.addEventListener('dragover', this.onDragOver);
+                window.addEventListener('dragleave', this.onDragLeave);
+                window.addEventListener('drop', this.onGlobalDrop);
+                window.addEventListener('paste', this.handlePaste);
+                this.fetchScryfallIcon();
+            },
+            unmounted() {
+                window.removeEventListener('keydown', this.handleKeydown);
+                window.removeEventListener('dragenter', this.onDragEnter);
+                window.removeEventListener('dragover', this.onDragOver);
+                window.removeEventListener('dragleave', this.onDragLeave);
+                window.removeEventListener('drop', this.onGlobalDrop);
+                window.removeEventListener('paste', this.handlePaste);
+            },
+            methods: {
+                /* --- Backdrop Helpers --- */
+                handleBackdropMouseDown(e) {
+                    // Only set flag if clicking strictly on the background (self), not children
+                    this.backdropInteract = e.target === e.currentTarget;
+                },
+                handleBackdropClick(closeAction) {
+                    // Only close if mousedown ALSO started on the background
+                    if (this.backdropInteract) {
+                        closeAction();
+                    }
+                    this.backdropInteract = false;
+                },
+
+                /* --- Core & Persistence --- */
+                async saveSession() { try { const rawData = { cards: this.cards, globalDuplex: this.globalDuplex, settings: this.settings, preferredVersions: this.preferredVersions, scryfallIcon: this.scryfallIcon }; const data = JSON.parse(JSON.stringify(rawData)); await saveToDB(data); } catch (e) { console.warn("Storage issue", e); } },
+                async loadSession() { try { const parsed = await loadFromDB(); if (parsed && parsed.cards) { this.cards = parsed.cards.map(c => ({ ...c, selected: false })); this.globalDuplex = parsed.globalDuplex || false; if (parsed.settings) this.settings = { ...this.settings, ...parsed.settings }; if (parsed.preferredVersions) this.preferredVersions = parsed.preferredVersions; if (parsed.scryfallIcon) this.scryfallIcon = parsed.scryfallIcon; } } catch (e) { console.error("Load error", e); } },
+                saveProject() { const exportData = { cards: this.cards, globalDuplex: this.globalDuplex, settings: this.settings }; const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2)); const node = document.createElement('a'); node.href = dataStr; node.download = "proxy-deck.json"; document.body.appendChild(node); node.click(); node.remove(); },
+                loadProject(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const json = JSON.parse(e.target.result); if (json.cards) { this.cards = json.cards; this.globalDuplex = json.globalDuplex || false; if (json.settings) this.settings = { ...this.settings, ...json.settings }; } else if (Array.isArray(json)) { this.cards = json; } this.saveSession(); } catch (err) { this.errorMessage = "Error parsing JSON."; } }; reader.readAsText(file); event.target.value = ''; },
+                async fetchScryfallIcon() { if (this.scryfallIcon) return; try { const res = await fetch("https://scryfall.com/icon.png?v=50f823f108c8"); const blob = await res.blob(); const reader = new FileReader(); reader.onloadend = () => { this.scryfallIcon = reader.result; this.saveSession(); }; reader.readAsDataURL(blob); } catch (e) { console.error("Icon fetch failed", e); } },
+
+                /* --- UI Interaction --- */
+                handleKeydown(e) { if (e.key === 'Escape') { if (this.previewImage) this.previewImage = null; else if (this.showImportModal) this.showImportModal = false; else if (this.showVersionModal) this.showVersionModal = false; else if (this.showSettingsModal) this.showSettingsModal = false; else if (this.showPreviewModal) this.showPreviewModal = false; else if (this.showSearchHelp) this.showSearchHelp = false; this.showSortMenu = false; } },
+                toggleSelectAll() { const target = !this.allSelected; this.cards.forEach(c => c.selected = target); },
+                deselectAll() { this.cards.forEach(c => c.selected = false); },
+
+                /* --- Deck Management (Add/Remove/Edit) --- */
+                removeCard(index) { this.cards.splice(index, 1); },
+                confirmClear() { if (confirm("Clear entire deck?")) this.cards = []; },
+                setMassQty(q) { this.cards.forEach(c => { if (c.selected) c.qty = q; }); },
+                async massChangeLanguage(targetLang) {
+                    const selectedCards = this.cards.filter(c => c.selected);
+                    if (selectedCards.length === 0) return;
+
+                    this.statusMessage = `Fetching ${targetLang.toUpperCase()} images for ${selectedCards.length} card(s)...`;
+                    let updatedCount = 0;
+
+                    // Helper to extract image URI safely
+                    const getImg = (cData) => {
+                        if (cData.card_faces && cData.card_faces[0].image_uris) {
+                            return cData.card_faces[0].image_uris.png || cData.card_faces[0].image_uris.large;
+                        }
+                        return cData.image_uris?.png || cData.image_uris?.large;
+                    };
+                    const getBackImg = (cData) => {
+                        if (cData.card_faces && cData.card_faces[1].image_uris) {
+                            return cData.card_faces[1].image_uris.png || cData.card_faces[1].image_uris.large;
+                        }
+                        return null;
+                    };
+
+                    for (const card of selectedCards) {
+                        // Skip local files or if language is already set
+                        if (card.set === 'Local' || card.lang === targetLang) continue;
+
+                        try {
+                            let newData = null;
+
+                            // STRATEGY 1: Try to get the EXACT same printing in the new language
+                            // Endpoint: /cards/:set/:cn/:lang
+                            if (card.set && card.cn) {
+                                const exactRes = await fetch(`https://api.scryfall.com/cards/${card.set}/${card.cn}/${targetLang}`);
+                                if (exactRes.ok) {
+                                    newData = await exactRes.json();
+                                }
+                            }
+
+                            // STRATEGY 2: Fallback - specific print not found, find ANY print in this language
+                            // Endpoint: /cards/search (using oracle_id if available, or name)
+                            if (!newData) {
+                                let query = `lang:${targetLang} unique:prints`;
+                                if (card.oracle_id) {
+                                    query += ` oracle_id:${card.oracle_id}`;
+                                } else {
+                                    // Remove existing language tags or split card names for search
+                                    const cleanName = card.name.split(" // ")[0].replace(/ \(.*?\)/g, "");
+                                    query += ` !"${cleanName}"`;
+                                }
+
+                                const searchRes = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released`);
+                                if (searchRes.ok) {
+                                    const searchData = await searchRes.json();
+                                    // Take the first match (most recent printing usually due to order=released)
+                                    if (searchData.data && searchData.data.length > 0) {
+                                        newData = searchData.data[0];
+                                    }
+                                }
+                            }
+
+                            // APPLY UPDATES
+                            if (newData) {
+                                card.src = getImg(newData);
+
+                                // Handle Back faces (DFC)
+                                const newBack = getBackImg(newData);
+                                if (newBack) {
+                                    card.backSrc = newBack;
+                                    card.dfcData = { frontSrc: card.src, backSrc: newBack };
+                                }
+
+                                // Update Metadata so the UI reflects the actual version found
+                                card.set = newData.set.toUpperCase();
+                                card.cn = newData.collector_number;
+                                card.lang = targetLang;
+                                // Optional: Update artist/frame data if you use them for sorting
+                                if (newData.artist) card.artist = newData.artist;
+
+                                updatedCount++;
+                            }
+
+                        } catch (e) {
+                            console.error(`Failed to translate ${card.name}`, e);
+                        }
+
+                        // Small delay to respect Scryfall rate limits (75ms)
+                        await new Promise(r => setTimeout(r, 75));
+                    }
+
+                    this.saveSession();
+                    this.statusMessage = `Updated ${updatedCount} cards to ${targetLang.toUpperCase()}.`;
+
+                    // Clear message after 3 seconds
+                    setTimeout(() => { this.statusMessage = ''; }, 3000);
+                },
+
+
+                deleteSelected() { if (confirm(`Delete ${this.selectedCount} selected cards?`)) { this.cards = this.cards.filter(c => !c.selected); } },
+
+                openDeckEditor() {
+                    // Converts current deck back to text format
+                    const lines = this.cards.filter(c => c.set !== 'Local').map(c => {
+                        let name = c.name.replace(" (Front)", "").replace(" (Back)", "");
+                        const langTag = (c.lang && c.lang !== 'en') ? ` [${c.lang.toUpperCase()}]` : '';
+                        return (c.set && c.cn) ? `${c.qty} ${name} (${c.set}) ${c.cn}${langTag}` : `${c.qty} ${name}${langTag}`;
+                    });
+                    this.importText = lines.join('\n'); this.showImportModal = true; this.importErrors = [];
+                },
+                copyDecklist() { navigator.clipboard.writeText(this.importText); },
+
+                /* --- Sorting Logic --- */
+                calculateColorRank(cStr) {
+                    if (!cStr) return 0; // Colorless
+                    // Normalize string (e.g., "GW" -> "WG" based on WUBRG order)
+                    const order = "WUBRG";
+                    const norm = cStr.split('').sort((a, b) => order.indexOf(a) - order.indexOf(b)).join('');
+
+                    // Mono (1-5)
+                    if (norm.length === 1) return 10 + order.indexOf(norm);
+
+                    // Pairs
+                    const allied = ['WU', 'UB', 'BR', 'RG', 'WG'];
+                    const enemy = ['WB', 'BG', 'UG', 'UR', 'WR'];
+                    if (norm.length === 2) {
+                        const ai = allied.indexOf(norm);
+                        if (ai !== -1) return 20 + ai;
+                        const ei = enemy.indexOf(norm);
+                        if (ei !== -1) return 30 + ei;
+                        return 39;
+                    }
+
+                    // Trios
+                    const shards = ['WGU', 'WUB', 'UBR', 'BRG', 'WRG'];
+                    const wedges = ['WBG', 'WUR', 'UBG', 'WBR', 'URG'];
+                    if (norm.length === 3) {
+                        const si = shards.indexOf(norm);
+                        if (si !== -1) return 40 + si;
+                        const wi = wedges.indexOf(norm);
+                        if (wi !== -1) return 50 + wi;
+                        return 59;
+                    }
+                    return 60 + norm.length;
+                },
+
+                sortCards(key) {
+                    // Toggle direction if clicking same header
+                    if (this.sortState.key === key) {
+                        this.sortState.order = this.sortState.order === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sortState.key = key;
+                        this.sortState.order = 'asc';
+                    }
+
+                    const modifier = this.sortState.order === 'asc' ? 1 : -1;
+
+                    this.cards.sort((a, b) => {
+                        let valA, valB;
+
+                        if (key === 'color') {
+                            valA = this.calculateColorRank(a.color || '');
+                            valB = this.calculateColorRank(b.color || '');
+                            if (valA !== valB) return (valA - valB) * modifier;
+                            return 0; // Fallback to stable sort
+                        }
+
+                        if (key === 'name') {
+                            valA = a.name.toLowerCase(); valB = b.name.toLowerCase();
+                        } else if (key === 'cmc') {
+                            valA = a.cmc || 0; valB = b.cmc || 0;
+                        } else if (key === 'type') {
+                            valA = (a.type_line || '').toLowerCase(); valB = (b.type_line || '').toLowerCase();
+                        } else if (key === 'dfc') {
+                            valA = !!a.backSrc ? 1 : 0; valB = !!b.backSrc ? 1 : 0;
+                        } else if (key === 'tokens') {
+                            const isToken = (c) => (c.type_line || '').toLowerCase().includes('token');
+                            valA = isToken(a) ? 1 : 0; valB = isToken(b) ? 1 : 0;
+                        }
+
+                        if (valA < valB) return -1 * modifier;
+                        if (valA > valB) return 1 * modifier;
+                        return 0;
+                    });
+                    this.showSortMenu = false;
+                    this.saveSession();
+                },
+
+                /* --- File Handling (Drag/Drop/Paste) --- */
+                handlePaste(e) {
+                    const items = e.clipboardData.items; const files = [];
+                    for (let i = 0; i < items.length; i++) { if (items[i].type.indexOf("image") !== -1) files.push(items[i].getAsFile()); }
+                    if (files.length > 0) { e.preventDefault(); this.processFiles(files); }
+                },
+                onDragEnter(e) { if (e.dataTransfer.types.includes("Files")) this.isDraggingFile = true; },
+                onDragOver(e) { e.preventDefault(); },
+                onDragLeave(e) { if (e.relatedTarget === null) this.isDraggingFile = false; },
+                onGlobalDrop(e) { e.preventDefault(); this.isDraggingFile = false; if (this.showVersionModal) return; this.processFiles(e.dataTransfer.files); },
+
+                handleFileSelect(event) { this.processFiles(event.target.files); event.target.value = ''; },
+
+                async processFiles(fileList) {
+                    // Handles local file uploads and tries to identify them via Scryfall API
+                    this.errorMessage = '';
+                    const filesToProcess = [];
+
+                    // 1. Read all files first
+                    for (const file of Array.from(fileList)) {
+                        if (!file.type.startsWith('image/')) continue;
+                        try {
+                            const result = await new Promise((resolve, reject) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => resolve({
+                                    originalName: file.name,
+                                    cleanName: file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
+                                    src: e.target.result
+                                });
+                                reader.onerror = reject;
+                                reader.readAsDataURL(file);
+                            });
+                            filesToProcess.push(result);
+                        } catch (e) { console.error("File read error", e); }
+                    }
+                    if (filesToProcess.length === 0) return;
+
+                    // 2. Batch identify against Scryfall
+                    const BATCH_SIZE = 75;
+                    const batches = [];
+                    for (let i = 0; i < filesToProcess.length; i += BATCH_SIZE) batches.push(filesToProcess.slice(i, i + BATCH_SIZE));
+
+                    for (let batch of batches) {
+                        const identifiers = batch.map(f => ({ name: f.cleanName }));
+                        try {
+                            const response = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiers }) });
+                            const data = await response.json();
+
+                            // Create map for O(1) lookups
+                            const foundMap = new Map();
+                            if (data.data) {
+                                data.data.forEach(card => {
+                                    foundMap.set(card.name.toLowerCase(), card);
+                                    if (card.card_faces) foundMap.set(card.card_faces[0].name.toLowerCase(), card);
+                                });
+                            }
+
+                            batch.forEach(file => {
+                                // Try finding match
+                                const match = foundMap.get(file.cleanName.toLowerCase()) || Array.from(foundMap.values()).find(c => c.name.toLowerCase().includes(file.cleanName.toLowerCase()));
+
+                                if (match) {
+                                    // Found: Add as real card with local image
+                                    let backSrc = null;
+                                    let set = 'CUST';
+                                    let cn = match.collector_number;
+                                    if (match.card_faces && match.card_faces[0].image_uris) {
+                                        backSrc = match.card_faces[1].image_uris?.png || match.card_faces[1].image_uris?.large;
+                                    }
+                                    const newCard = {
+                                        name: match.name, src: file.src, qty: 1, set: set, cn: cn,
+                                        backSrc: backSrc, showBack: false, isDuplex: false, selected: false,
+                                        dfcData: backSrc ? { frontSrc: file.src, backSrc: backSrc } : null,
+                                        oracle_id: match.oracle_id, lang: match.lang,
+                                        // Save metadata for sorting
+                                        cmc: match.cmc !== undefined ? match.cmc : (match.card_faces ? match.card_faces[0].cmc : 0),
+                                        color: match.colors ? match.colors.join('') : (match.card_faces ? (match.card_faces[0].colors || []).join('') : ''),
+                                        type_line: match.type_line || (match.card_faces ? match.card_faces[0].type_line : '')
+                                    };
+                                    this.cards.push(newCard);
+                                } else {
+                                    // Not Found: Add as pure local file
+                                    this.cards.push({
+                                        name: file.cleanName, src: file.src, qty: 1, set: 'Local', cn: '',
+                                        backSrc: null, showBack: false, dfcData: null, isDuplex: false, selected: false, oracle_id: null, lang: 'en',
+                                        cmc: 0, color: '', type_line: 'Local File'
+                                    });
+                                }
+                            });
+                        } catch (e) {
+                            console.error("Identification error", e);
+                            // Fallback on error: add everything as local
+                            batch.forEach(file => {
+                                this.cards.push({
+                                    name: file.cleanName, src: file.src, qty: 1, set: 'Local', cn: '',
+                                    backSrc: null, showBack: false, dfcData: null, isDuplex: false, selected: false, oracle_id: null, lang: 'en',
+                                    cmc: 0, color: '', type_line: 'Local File'
+                                });
+                            });
+                        }
+                        await new Promise(r => setTimeout(r, 100)); // Be nice to API
+                    }
+                },
+
+
+
+
+
+                /* --- Scryfall API: Import & Deck Sync --- */
+
+
+
+
+
+                async importDeckFromURL() {
+                    // IMMEDIATE LOG: Confirm function is running
+                    console.log("--- IMPORT STARTING ---");
+                    console.log("URL Input:", this.importUrl);
+
+                    // 1. Basic Input Validation
+                    if (!this.importUrl) {
+                        console.warn("Import aborted: No URL provided");
+                        return;
+                    }
+
+                    this.isFetchingUrl = true;
+                    this.errorMessage = '';
+                    this.importStatus = 'Starting trace... (Check Console)';
+
+                    const url = this.importUrl.trim();
+                    const startTime = Date.now();
+                    const traceLog = [];
+
+                    // Helper to log to both Console (Real-time) and TraceLog (History)
+                    const log = (msg) => {
+                        const time = ((Date.now() - startTime) / 1000).toFixed(2);
+                        const fullMsg = `[${time}s] ${msg}`;
+                        console.log(fullMsg);
+                        traceLog.push(fullMsg);
+                    };
+
+                    try {
+                        // 2. Validate Moxfield Domain & Extract Deck ID
+                        const moxfieldRegex = /moxfield\.com\/decks\/([a-zA-Z0-9\-_]+)/;
+                        const match = url.match(moxfieldRegex);
+
+                        if (!match) {
+                            log("Regex failed: URL did not match expected Moxfield format.");
+                            throw new Error("Invalid URL. Please enter a valid Moxfield deck link.");
+                        }
+
+                        const deckId = match[1];
+                        log(`Deck ID extracted: ${deckId}`);
+
+                        // STRATEGY: "Strict Validation"
+                        // We prioritize the API, then Main Page. 
+                        // We intentionally skip 'Embed' because it consistently returns empty shells via proxy.
+                        // We rely on the Main Page's __NEXT_DATA__ blob which is robust even without JS.
+                        const targets = [
+                            { name: 'API', url: `https://api.moxfield.com/v2/decks/all/${deckId}`, format: 'json' },
+                            { name: 'Main', url: `https://www.moxfield.com/decks/${deckId}`, format: 'html' }
+                        ];
+
+                        // Define proxies with Cache Busting
+                        const ts = Date.now();
+                        const proxies = [
+                            { name: 'CorsProxy', gen: (t) => `https://corsproxy.io/?${encodeURIComponent(t)}&_t=${ts}` },
+                            { name: 'AllOrigins', gen: (t) => `https://api.allorigins.win/raw?url=${encodeURIComponent(t)}&timestamp=${ts}` }
+                        ];
+
+                        let responseText = null;
+                        let successTarget = null;
+                        let successProxy = null;
+
+                        // 3. Attempt Fetch Loop
+                        outerLoop:
+                        for (const target of targets) {
+                            for (const proxy of proxies) {
+                                const stepName = `${target.name} via ${proxy.name}`;
+                                log(`Trying: ${stepName}`);
+
+                                try {
+                                    // Timeout Controller (20s max - Main page can be slow)
+                                    const controller = new AbortController();
+                                    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+                                    const res = await fetch(proxy.gen(target.url), { signal: controller.signal });
+                                    clearTimeout(timeoutId);
+
+                                    if (res.status === 404) {
+                                        log(`   -> Failed: Status 404 (Page not found).`);
+                                        continue;
+                                    }
+
+                                    if (res.ok) {
+                                        const text = await res.text();
+
+                                        // Validation: Check for Soft 404s or Block pages
+                                        if (text.includes('"status":404') || text.includes('"title":"Not Found"') || text.includes("Just a moment...") || text.includes("Cloudflare")) {
+                                            log("   -> Failed: Soft 404 or Cloudflare Block");
+                                            continue;
+                                        }
+
+                                        // STRICT VALIDATION:
+                                        // We do NOT accept a page just because it downloaded. 
+                                        // It MUST contain the data markers.
+                                        let isValid = false;
+
+                                        if (target.format === 'json') {
+                                            if (text.startsWith('{')) isValid = true;
+                                        }
+                                        else if (target.name === 'Main') {
+                                            // The Main page MUST contain the Next.js hydration blob
+                                            if (text.includes('__NEXT_DATA__')) {
+                                                isValid = true;
+                                            } else {
+                                                log("   -> Failed: Page downloaded but missing __NEXT_DATA__ blob (Empty Shell)");
+                                            }
+                                        }
+
+                                        if (isValid) {
+                                            responseText = text;
+                                            successTarget = target;
+                                            successProxy = proxy.name;
+                                            log("   -> SUCCESS: Valid Data Found");
+                                            break outerLoop;
+                                        }
+                                    } else {
+                                        log(`   -> Failed: Status ${res.status}`);
+                                    }
+                                } catch (err) {
+                                    log(`   -> Error: ${err.name === 'AbortError' ? 'Timeout' : err.message}`);
+                                }
+                            }
+                        }
+
+                        if (!responseText) {
+                            log("All strategies failed.");
+                            this.importText = `--- IMPORT FAILED ---\nTrace Log:\n${traceLog.join('\n')}`;
+                            throw new Error("All strategies failed. Please check the Trace Log.");
+                        }
+
+                        // 4. PARSING
+                        log(`Parsing content from ${successTarget.name}...`);
+                        let cardsToImport = [];
+                        let debugParser = "";
+
+                        const extractFromZone = (zone) => {
+                            if (!zone) return;
+                            Object.values(zone).forEach(slot => {
+                                const name = slot.card?.name || slot.name;
+                                if (slot.quantity && name) cardsToImport.push(`${slot.quantity} ${name}`);
+                            });
+                        };
+
+                        // Strategy A: Next.js Data Blob (Primary for Main Page)
+                        if (successTarget.name === 'Main') {
+                            const nextDataMatch = responseText.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/);
+                            if (nextDataMatch && nextDataMatch[1]) {
+                                try {
+                                    const json = JSON.parse(nextDataMatch[1]);
+                                    const deckData = json?.props?.pageProps?.deck;
+                                    if (deckData) {
+                                        extractFromZone(deckData.commanders);
+                                        extractFromZone(deckData.mainboard);
+                                        extractFromZone(deckData.sideboard);
+                                        debugParser = "NextJS-Hydration";
+                                    } else {
+                                        log("   -> JSON parsed but 'deck' prop missing");
+                                    }
+                                } catch (e) { log("Parser A (Hydration) failed: " + e.message); }
+                            }
+                        }
+
+                        // Strategy B: JSON API
+                        if (cardsToImport.length === 0 && successTarget.format === 'json') {
+                            try {
+                                const data = JSON.parse(responseText);
+                                extractFromZone(data.commanders);
+                                extractFromZone(data.mainboard);
+                                extractFromZone(data.sideboard);
+                                debugParser = "API-JSON";
+                            } catch (e) { log("Parser B (API) failed: " + e.message); }
+                        }
+
+                        // 5. Final Result
+                        const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+
+                        if (cardsToImport.length > 0) {
+                            this.importText = cardsToImport.join('\n');
+                            this.importStatus = `Success! (${totalTime}s)\nTarget: ${successTarget.name}\nProxy: ${successProxy}\nParser: ${debugParser}`;
+                            log("--- FINISHED SUCCESS ---");
+                        } else {
+                            this.importText = `--- IMPORT FAILED ---\nTrace Log:\n${traceLog.join('\n')}\n\nContent Preview:\n${responseText.slice(0, 500)}`;
+                            this.errorMessage = "No cards found. The deck might be Private.";
+                            log("--- FINISHED FAILED ---");
+                        }
+
+                        this.importUrl = '';
+
+                    } catch (error) {
+                        console.error("Critical Import Error:", error);
+                        this.errorMessage = error.message;
+                    } finally {
+                        this.isFetchingUrl = false;
+                    }
+                },
+
+
+
+
+
+                async processImport() {
+                    this.isImporting = true;
+                    this.importStatus = 'Analyzing...';
+                    this.importErrors = [];
+                    this.errorMessage = '';
+
+                    const lines = this.importText.split('\n').filter(l => l.trim() !== '');
+                    const targets = [];
+
+                    // Regex patterns: Quantities are now optional (default to 1)
+                    const specificRegex = /^(?:(\d+)[x\s]+)?(.+?)\s+\(([a-zA-Z0-9]+)\)\s+([a-zA-Z0-9]+)(?:\s+\[([a-zA-Z]+)\])?$/i;
+                    const simpleRegex = /^(?:(\d+)[x\s]+)?(.+?)(?:\s+\[([a-zA-Z]+)\])?$/i;
+
+                    // 1. Parse all lines
+                    for (let line of lines) {
+                        line = line.trim();
+                        if (line.startsWith('//') || line.startsWith('#')) continue;
+
+                        let match = line.match(specificRegex);
+                        if (match) {
+                            targets.push({
+                                type: 'specific',
+                                qty: match[1] ? parseInt(match[1]) : 1,
+                                name: match[2].trim(),
+                                set: match[3].trim().toUpperCase(),
+                                cn: match[4].trim(),
+                                lang: match[5] ? match[5].toLowerCase() : 'en',
+                                found: false
+                            });
+                            continue;
+                        }
+
+                        match = line.match(simpleRegex);
+                        if (match) {
+                            targets.push({
+                                type: 'simple',
+                                qty: match[1] ? parseInt(match[1]) : 1,
+                                name: match[2].trim(),
+                                lang: match[3] ? match[3].toLowerCase() : 'en',
+                                found: false
+                            });
+                        } else {
+                            // Fallback
+                            targets.push({
+                                type: 'simple',
+                                qty: 1,
+                                name: line,
+                                lang: 'en',
+                                found: false
+                            });
+                        }
+                    }
+
+                    const nextCards = [];
+                    const fetchQueue = [];
+                    const usedLocalIds = new Set();
+
+                    // 2. Check against existing cards
+                    for (let target of targets) {
+                        let existingMatch;
+                        if (target.type === 'specific') {
+                            existingMatch = this.cards.find(c => c.set === target.set && c.cn === target.cn && (c.lang || 'en') === target.lang);
+                        } else {
+                            existingMatch = this.cards.find(c => {
+                                const cName = c.name.toLowerCase().replace(/ \(.*\)/, '');
+                                // Normalize input name for DFCs (ensure spaces around //)
+                                const tName = target.name.toLowerCase().replace(/\s*\/\/\s*/g, ' // ');
+                                return (cName === tName || cName.startsWith(tName + " //")) && (c.lang || 'en') === target.lang;
+                            });
+                        }
+
+                        if (existingMatch) {
+                            if (existingMatch.set !== 'Local' && existingMatch.cmc === undefined) {
+                                fetchQueue.push(target);
+                            } else {
+                                const clone = JSON.parse(JSON.stringify(existingMatch));
+                                clone.qty = target.qty;
+                                nextCards.push(clone);
+                                target.found = true;
+                                if (existingMatch.set === 'Local') usedLocalIds.add(existingMatch);
+                            }
+                        } else {
+                            fetchQueue.push(target);
+                        }
+                    }
+
+                    // 3. Batch fetch missing cards
+                    if (fetchQueue.length > 0) {
+                        const BATCH_SIZE = 75;
+                        const batches = [];
+                        for (let i = 0; i < fetchQueue.length; i += BATCH_SIZE) batches.push(fetchQueue.slice(i, i + BATCH_SIZE));
+
+                        for (let batch of batches) {
+                            this.importStatus = `Fetching ${batch.length} new cards...`;
+
+                            // FIX APPLIED HERE: Normalize name spacing in the identifiers sent to API
+                            const identifiers = batch.map(t => {
+                                if (t.type === 'specific') {
+                                    return { set: t.set, collector_number: t.cn };
+                                }
+                                // Ensure " // " spacing for DFCs, otherwise Scryfall collection API fails
+                                return { name: t.name.replace(/\s*\/\/\s*/g, ' // ') };
+                            });
+
+                            try {
+                                const response = await fetch('https://api.scryfall.com/cards/collection', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ identifiers })
+                                });
+                                const data = await response.json();
+
+                                if (data.data) {
+                                    for (let target of batch) {
+                                        let scryCard = null;
+                                        if (target.type === 'specific') {
+                                            scryCard = data.data.find(c => c.set.toUpperCase() === target.set && c.collector_number === target.cn);
+                                        } else {
+                                            // Robust fuzzy match with Normalization
+                                            const tName = target.name.toLowerCase().trim().replace(/\s*\/\/\s*/g, ' // ');
+                                            scryCard = data.data.find(c => {
+                                                const cName = c.name.toLowerCase();
+                                                return cName === tName ||
+                                                    cName.startsWith(tName + " //") ||
+                                                    (c.card_faces && c.card_faces.some(f => f.name.toLowerCase() === tName));
+                                            });
+                                        }
+
+                                        if (scryCard) {
+                                            target.found = true;
+                                            // Handle Language Request
+                                            if (target.lang !== 'en') {
+                                                try {
+                                                    const langRes = await fetch(`https://api.scryfall.com/cards/${scryCard.set}/${scryCard.collector_number}/${target.lang}`);
+                                                    if (langRes.ok) scryCard = await langRes.json();
+                                                } catch (e) { /* ignore */ }
+                                            }
+
+                                            let src = '', backSrc = null;
+                                            if (scryCard.card_faces && scryCard.card_faces[0].image_uris) {
+                                                src = scryCard.card_faces[0].image_uris.png || scryCard.card_faces[0].image_uris.large;
+                                                backSrc = scryCard.card_faces[1].image_uris?.png || scryCard.card_faces[1].image_uris?.large;
+                                            } else {
+                                                src = scryCard.image_uris?.png || scryCard.image_uris?.large;
+                                            }
+
+                                            if (src) {
+                                                const newCard = {
+                                                    name: scryCard.name, set: scryCard.set.toUpperCase(), cn: scryCard.collector_number,
+                                                    src, backSrc, showBack: false, qty: target.qty, dfcData: null, selected: false, isDuplex: false,
+                                                    oracle_id: scryCard.oracle_id, lang: target.lang,
+                                                    cmc: scryCard.cmc !== undefined ? scryCard.cmc : (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
+                                                    color: scryCard.colors ? scryCard.colors.join('') : (scryCard.card_faces ? (scryCard.card_faces[0].colors || []).join('') : ''),
+                                                    type_line: scryCard.type_line || (scryCard.card_faces ? scryCard.card_faces[0].type_line : '')
+                                                };
+                                                if (backSrc) newCard.dfcData = { frontSrc: src, backSrc: backSrc };
+                                                nextCards.push(newCard);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Handle Not Found
+                                if (data.not_found && data.not_found.length > 0) {
+                                    data.not_found.forEach(nf => {
+                                        // Verify we didn't actually find it via fuzzy match before erroring
+                                        const isActuallyFound = batch.some(t => t.found && (t.name.toLowerCase() === nf.name?.toLowerCase()));
+                                        if (!isActuallyFound) {
+                                            let name = nf.name || (nf.set ? `${nf.set} #${nf.collector_number}` : "Unknown Card");
+                                            this.importErrors.push(name);
+                                        }
+                                    });
+                                }
+
+                            } catch (e) {
+                                console.error("API Error", e);
+                                this.importErrors.push("Network Error - Could not reach Scryfall");
+                            }
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                    }
+
+                    // 4. Re-add local files that weren't replaced
+                    const remainingLocalFiles = this.cards.filter(c => c.set === 'Local' && !usedLocalIds.has(c));
+                    nextCards.push(...remainingLocalFiles);
+
+                    this.cards = nextCards;
+                    this.isImporting = false;
+
+                    // 5. Final Status
+                    if (this.importErrors.length > 0) {
+                        this.importStatus = `Complete. ${this.importErrors.length} cards could not be found.`;
+                    } else {
+                        this.importStatus = 'Sync complete.';
+                        setTimeout(() => {
+                            this.showImportModal = false;
+                            this.importStatus = '';
+                        }, 800);
+                    }
+                },
+
+
+                /* --- Token & DFC Management --- */
+                splitCard(index) {
+                    const card = this.cards[index];
+                    if (!card.backSrc) return;
+                    if (!card.dfcData) card.dfcData = { frontSrc: card.src, backSrc: card.backSrc };
+                    const backCard = {
+                        name: card.name + " (Back)", src: card.backSrc, qty: card.qty, set: card.set, cn: card.cn,
+                        backSrc: null, showBack: false, dfcData: { ...card.dfcData }, selected: false, oracle_id: card.oracle_id, lang: card.lang
+                    };
+                    card.name = card.name + " (Front)"; card.backSrc = null;
+                    this.cards.splice(index + 1, 0, backCard);
+                },
+                restoreDFC(index) {
+                    const card = this.cards[index];
+                    if (!card.dfcData) return;
+                    const baseName = card.name.replace(" (Front)", "").replace(" (Back)", "");
+                    // Remove partner if it exists next to it
+                    if (card.name.includes(" (Front)")) {
+                        const expectedBackName = baseName + " (Back)";
+                        if (index + 1 < this.cards.length) {
+                            const nextCard = this.cards[index + 1];
+                            if (nextCard.name === expectedBackName || nextCard.oracle_id === card.oracle_id) {
+                                this.cards.splice(index + 1, 1);
+                            }
+                        }
+                    } else if (card.name.includes(" (Back)")) {
+                        const expectedFrontName = baseName + " (Front)";
+                        if (index - 1 >= 0) {
+                            const prevCard = this.cards[index - 1];
+                            if (prevCard.name === expectedFrontName || prevCard.oracle_id === card.oracle_id) {
+                                this.cards.splice(index - 1, 1);
+                            }
+                        }
+                    }
+                    card.src = card.dfcData.frontSrc; card.backSrc = card.dfcData.backSrc; card.name = baseName;
+                    this.saveSession();
+                },
+                groupDFCs() {
+                    this.cards.sort((a, b) => {
+                        const aIsDFC = !!a.backSrc; const bIsDFC = !!b.backSrc;
+                        if (aIsDFC && !bIsDFC) return -1; if (!aIsDFC && bIsDFC) return 1; return 0;
+                    });
+                    this.saveSession();
+                },
+
+                isTokenOrHelper(part) { if (part.component === 'token') return true; if (part.component === 'meld_result') return true; if (part.type_line) { const t = part.type_line.toLowerCase(); if (t.includes('token') || t.includes('emblem') || t.includes('dungeon')) return true; } return false; },
+                async fetchTokensForCard(index) { const card = this.cards[index]; if (card.set === 'Local' && !card.cn) { this.errorMessage = `Cannot fetch tokens for local file "${card.name}".`; return; } this.isFetchingTokens = true; const identifier = (card.set !== 'Local' && card.cn) ? { set: card.set, collector_number: card.cn } : { name: card.name }; try { const response = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiers: [identifier] }) }); const data = await response.json(); if (data.data && data.data.length > 0) { const scryCard = data.data[0]; const tokenIds = new Set(); if (scryCard.all_parts) { scryCard.all_parts.forEach(part => { if (this.isTokenOrHelper(part)) { tokenIds.add(part.id); } }); } if (tokenIds.size > 0) { await this.resolveAndAddTokens(Array.from(tokenIds)); } else { this.errorMessage = `No tokens found for ${card.name}`; } } } catch (e) { console.error("Token fetch error", e); this.errorMessage = "Failed to fetch tokens."; } finally { this.isFetchingTokens = false; } },
+                async fetchAllTokens() { this.isFetchingTokens = true; const identifiers = this.cards.filter(c => !(c.set === 'Local' && !c.cn)).map(c => (c.set !== 'Local' && c.cn) ? { set: c.set, collector_number: c.cn } : { name: c.name }); if (identifiers.length === 0) { this.isFetchingTokens = false; return; } const BATCH_SIZE = 75; const batches = []; for (let i = 0; i < identifiers.length; i += BATCH_SIZE) batches.push(identifiers.slice(i, i + BATCH_SIZE)); const allTokenIds = new Set(); try { for (let batch of batches) { const res = await fetch('https://api.scryfall.com/cards/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identifiers: batch }) }); const data = await res.json(); if (data.data) { data.data.forEach(c => { if (c.layout === 'token' || c.layout === 'double_faced_token') return; if (c.all_parts) { c.all_parts.forEach(part => { if (this.isTokenOrHelper(part)) { allTokenIds.add(part.id); } }); } }); } await new Promise(r => setTimeout(r, 100)); } if (allTokenIds.size > 0) { await this.resolveAndAddTokens(Array.from(allTokenIds)); } else { this.errorMessage = "No tokens found for this deck."; } } catch (e) { console.error("Batch token error", e); this.errorMessage = "Failed to fetch all tokens."; } finally { this.isFetchingTokens = false; } },
+                async resolveAndAddTokens(tokenIds) {
+                    const BATCH_SIZE = 75;
+                    const batches = [];
+                    for (let i = 0; i < tokenIds.length; i += BATCH_SIZE) batches.push(tokenIds.slice(i, i + BATCH_SIZE));
+
+                    for (let batchIds of batches) {
+                        const identifiers = batchIds.map(id => ({ id }));
+                        const res = await fetch('https://api.scryfall.com/cards/collection', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ identifiers })
+                        });
+                        const data = await res.json();
+
+                        if (data.data) {
+                            data.data.forEach(token => {
+                                // --- FIX STARTS HERE ---
+                                // Check against Oracle ID first (handles different versions of same token)
+                                // Fallback to Set/CN for cards that might not have an oracle ID populated
+                                const exists = this.cards.some(c => {
+                                    if (token.oracle_id && c.oracle_id === token.oracle_id) return true;
+                                    return c.set === token.set.toUpperCase() && c.cn === token.collector_number;
+                                });
+                                // --- FIX ENDS HERE ---
+
+                                if (exists) return;
+
+                                let src = '',
+                                    backSrc = null;
+                                if (token.card_faces && token.card_faces[0].image_uris) {
+                                    src = token.card_faces[0].image_uris.png || token.card_faces[0].image_uris.large;
+                                    backSrc = token.card_faces[1].image_uris?.png || token.card_faces[1].image_uris?.large;
+                                } else {
+                                    src = token.image_uris?.png || token.image_uris?.large;
+                                }
+
+                                if (src) {
+                                    const newCard = {
+                                        name: token.name,
+                                        set: token.set.toUpperCase(),
+                                        cn: token.collector_number,
+                                        src,
+                                        backSrc,
+                                        showBack: false,
+                                        qty: 1,
+                                        dfcData: null,
+                                        selected: false,
+                                        isDuplex: false,
+                                        oracle_id: token.oracle_id, // Ensure this is saved (your original code already does this)
+                                        lang: token.lang,
+                                        cmc: token.cmc || 0,
+                                        color: (token.colors || []).join(''),
+                                        type_line: token.type_line || ''
+                                    };
+                                    if (backSrc) newCard.dfcData = {
+                                        frontSrc: src,
+                                        backSrc: backSrc
+                                    };
+                                    this.cards.push(newCard);
+                                }
+                            });
+                        }
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                },
+                /* --- Version Selection Modal --- */
+                async openVersionSelector(index, preserveLang = false) {
+                    const card = this.cards[index];
+                    this.activeCardIndex = index;
+                    this.showVersionModal = true;
+                    this.versionList = [];
+                    this.versionSearchQuery = '';
+
+                    if (!preserveLang) {
+                        this.versionLang = card.lang || 'en';
+                    }
+
+                    this.isFetchingVersions = true;
+                    this.versionShowBack = card.name.includes("(Back)");
+
+                    if (card.set === 'CUST' || card.set === 'Local') {
+                        this.versionList.push({
+                            id: 'custom-current', set: card.set, setName: 'Current Custom Image', cn: card.cn || '---', year: 'Custom',
+                            previewSrc: card.src, fullSrc: card.src, backSrc: card.backSrc, backPreviewSrc: card.backSrc
+                        });
+                    }
+
+                    const cacheKey = card.oracle_id || card.name.replace(" (Front)", "").replace(" (Back)", "");
+                    // Skip cache if looking for specific non-english language
+                    if (this.versionCache.has(cacheKey) && this.versionLang === 'en') {
+                        const cached = this.versionCache.get(cacheKey);
+                        this.versionList.push(...cached);
+                        this.isFetchingVersions = false;
+                        return;
+                    }
+
+                    try {
+                        let query = '';
+                        if (card.oracle_id) {
+                            query = `oracle_id:${card.oracle_id} include:extras unique:prints`;
+                        } else {
+                            const searchName = card.name.replace(" (Front)", "").replace(" (Back)", "");
+                            query = `!"${searchName}" include:extras unique:prints`;
+                        }
+
+                        if (this.versionLang && this.versionLang !== 'en') {
+                            query += ` lang:${this.versionLang}`;
+                        }
+
+                        const encodedQuery = encodeURIComponent(query);
+                        let url = `https://api.scryfall.com/cards/search?q=${encodedQuery}&order=released&dir=desc`;
+                        let hasMore = true;
+                        let accumulatedVersions = [];
+
+                        while (hasMore && this.showVersionModal) {
+                            const res = await fetch(url);
+                            const data = await res.json();
+                            if (data.data) {
+                                const scryfallVersions = data.data.map(c => {
+                                    let previewSrc = '', fullSrc = '', backSrc = null, backPreviewSrc = null;
+                                    if (c.card_faces && c.card_faces[0].image_uris) {
+                                        previewSrc = c.card_faces[0].image_uris.normal; fullSrc = c.card_faces[0].image_uris.png || c.card_faces[0].image_uris.large;
+                                        backPreviewSrc = c.card_faces[1].image_uris?.normal; backSrc = c.card_faces[1].image_uris?.png || c.card_faces[1].image_uris?.large;
+                                    } else {
+                                        previewSrc = c.image_uris?.normal; fullSrc = c.image_uris?.png || c.image_uris?.large;
+                                    }
+                                    return {
+                                        id: c.id,
+                                        set: c.set.toUpperCase(),
+                                        setName: c.set_name,
+                                        cn: c.collector_number,
+                                        year: c.released_at ? c.released_at.substring(0, 4) : '????',
+                                        previewSrc, fullSrc, backPreviewSrc, backSrc,
+                                        artist: c.artist || '',
+                                        frame: c.frame || '',
+                                        border: c.border_color || '',
+                                        games: c.games || [],
+                                        full_art: c.full_art || false,
+                                        textless: c.textless || false,
+                                        lang: c.lang,
+                                        cmc: c.cmc !== undefined ? c.cmc : (c.card_faces ? c.card_faces[0].cmc : 0),
+                                        color: c.colors ? c.colors.join('') : (c.card_faces ? (c.card_faces[0].colors || []).join('') : ''),
+                                        type_line: c.type_line || (c.card_faces ? c.card_faces[0].type_line : '')
+                                    };
+                                });
+                                this.versionList.push(...scryfallVersions);
+                                accumulatedVersions.push(...scryfallVersions);
+                            }
+                            if (data.has_more && data.next_page) { url = data.next_page; await new Promise(r => setTimeout(r, 100)); } else { hasMore = false; }
+                        }
+                        if (!hasMore && this.versionLang === 'en') { this.versionCache.set(cacheKey, accumulatedVersions); }
+                    } catch (e) {
+                        console.error("Error fetching versions", e);
+                        if (this.versionList.length === 0) {
+                            if (this.versionLang !== 'en') {
+                                this.errorMessage = `No cards found in ${this.versionLang.toUpperCase()}.`;
+                            } else {
+                                this.errorMessage = "Failed to fetch card versions.";
+                            }
+                        }
+                    } finally { this.isFetchingVersions = false; }
+                },
+                handleCustomVersionUpload(event) {
+                    const file = event.target.files[0];
+                    if (!file || this.activeCardIndex === null) return;
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const card = this.cards[this.activeCardIndex];
+                        card.src = e.target.result; card.set = 'CUST'; card.cn = ''; card.backSrc = null; card.dfcData = null;
+                        this.saveSession(); this.showVersionModal = false; this.activeCardIndex = null; event.target.value = '';
+                    };
+                    reader.readAsDataURL(file);
+                },
+                selectVersion(version) {
+                    if (this.activeCardIndex === null) return;
+                    const card = this.cards[this.activeCardIndex];
+
+                    if (version.id !== 'custom-current' && version.set !== 'CUST') {
+                        this.preferredVersions[card.name] = {
+                            set: version.set, cn: version.cn, src: version.fullSrc, backSrc: version.backSrc, oracle_id: card.oracle_id
+                        };
+                    }
+
+                    const isSplitBack = card.name.includes("(Back)");
+                    card.set = version.set; card.cn = version.cn; card.lang = version.lang;
+
+                    if (isSplitBack) card.src = version.backSrc || version.fullSrc; else card.src = version.fullSrc;
+                    if (version.backSrc) {
+                        card.backSrc = (isSplitBack || card.name.includes("(Front)")) ? null : version.backSrc;
+                        card.dfcData = { frontSrc: version.fullSrc, backSrc: version.backSrc };
+                    } else { card.backSrc = null; card.dfcData = null; }
+
+                    // Apply Sorting Metadata
+                    if (version.cmc !== undefined) {
+                        card.cmc = version.cmc;
+                        card.color = version.color;
+                        card.type_line = version.type_line;
+                    }
+
+                    this.saveSession(); this.showVersionModal = false; this.activeCardIndex = null;
+                },
+                onVersionLangChange() {
+                    if (this.activeCardIndex !== null) {
+                        this.versionCache.clear();
+                        this.openVersionSelector(this.activeCardIndex, true);
+                    }
+                },
+                handleVersionDrop(e) {
+                    this.isDraggingOverModal = false; const files = e.dataTransfer.files;
+                    if (files.length > 0 && this.activeCardIndex !== null) { const mockEvent = { target: { files: files, value: '' } }; this.handleCustomVersionUpload(mockEvent); }
+                },
+
+                /* --- Card Dragging Logic --- */
+                onCardDragStart(e, index) { this.draggedCardIndex = index; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', index); },
+                onCardDragEnd() { this.draggedCardIndex = null; },
+                onCardDrop(e, targetIndex) {
+                    this.draggedCardIndex = null;
+                    const srcIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                    if (!isNaN(srcIndex) && srcIndex !== targetIndex) {
+                        const item = this.cards.splice(srcIndex, 1)[0];
+                        this.cards.splice(targetIndex, 0, item);
+                        this.saveSession();
+                    }
+                },
+
+                /* --- PDF Generation & Preview --- */
+
+                loadImage(src) {
+                    // 1. Check Promise Cache (Deduplication within this print session)
+                    if (!this._imgPromiseCache) this._imgPromiseCache = new Map();
+                    if (this._imgPromiseCache.has(src)) return this._imgPromiseCache.get(src);
+
+                    const loadPromise = new Promise((resolve, reject) => {
+                        // 2. Local Data URIs
+                        if (src.startsWith('data:')) {
+                            const img = new Image();
+                            img.onload = () => resolve(img);
+                            img.onerror = () => reject(new Error("Local image load failed"));
+                            img.src = src;
+                            return;
+                        }
+
+                        // 3. Remote URLs - Smart Strategy
+                        // First, try standard load (Fast, hits browser cache)
+                        const img = new Image();
+                        img.crossOrigin = "Anonymous";
+
+                        img.onload = () => resolve(img);
+
+                        img.onerror = () => {
+                            // If Fast load fails (usually due to CORS/Cache poisoning), 
+                            // fallback to Timestamp (Slower, but guaranteed to work)
+                            // This ensures we only "drain servers" when absolutely necessary to fix an error.
+                            console.warn("Retrying with timestamp for:", src);
+                            const retryImg = new Image();
+                            retryImg.crossOrigin = "Anonymous";
+                            const sep = src.includes('?') ? '&' : '?';
+                            retryImg.src = src + sep + 't=' + Date.now();
+
+                            retryImg.onload = () => resolve(retryImg);
+                            retryImg.onerror = (e) => reject(new Error("Image load failed after retry"));
+                        };
+
+                        img.src = src;
+                    });
+
+                    this._imgPromiseCache.set(src, loadPromise);
+                    return loadPromise;
+                },
+
+
+
+                async openPreview() {
+                    this.isGenerating = true;
+                    try {
+                        const scale = Number(this.settings.cardScale) / 100;
+                        const cardW = Number(this.settings.cardWidth) * scale;
+                        const cardH = Number(this.settings.cardHeight) * scale;
+                        const gap = Number(this.settings.gapSize);
+                        const pxFactor = 3;
+
+                        // Use dimensions from constant
+                        const pageSize = PAPER_SIZES[this.settings.paperSize];
+                        const pageWidthMm = pageSize.w;
+                        const pageHeightMm = pageSize.h;
+
+                        const pW = pageWidthMm * pxFactor;
+                        const pH = pageHeightMm * pxFactor;
+
+                        let cols = Math.floor((pageWidthMm - 10) / (cardW + gap));
+                        let rows = Math.floor((pageHeightMm - 10) / (cardH + gap));
+                        if (cols < 1) cols = 1; if (rows < 1) rows = 1;
+
+                        const gridWidth = (cols * cardW) + ((cols - 1) * gap);
+                        const gridHeight = (rows * cardH) + ((rows - 1) * gap);
+                        const startX = (pageWidthMm - gridWidth) / 2;
+                        const startY = (pageHeightMm - gridHeight) / 2;
+                        const itemsPerPage = cols * rows;
+
+                        let printQueue = [];
+                        this.cards.forEach(card => {
+                            for (let i = 0; i < card.qty; i++) {
+                                printQueue.push({ src: card.src, backSrc: card.backSrc, name: card.name });
+                            }
+                        });
+
+                        const pages = [];
+                        const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
+
+                        for (let b = 0; b < totalBatches; b++) {
+                            const batch = printQueue.slice(b * itemsPerPage, (b + 1) * itemsPerPage);
+                            const pageItems = [];
+
+                            batch.forEach((card, i) => {
+                                const col = i % cols;
+                                const row = Math.floor(i / cols);
+                                const x = startX + (col * (cardW + gap));
+                                const y = startY + (row * (cardH + gap));
+                                pageItems.push({ i: i, src: card.src, x: x * pxFactor, y: y * pxFactor, w: cardW * pxFactor, h: cardH * pxFactor });
+                            });
+                            pages.push({ w: pW, h: pH, items: pageItems });
+
+                            if (this.globalDuplex && this.hasDFC) {
+                                const backItems = [];
+                                batch.forEach((card, i) => {
+                                    if (card.backSrc) {
+                                        const col = i % cols;
+                                        const row = Math.floor(i / cols);
+                                        const mirroredCol = (cols - 1) - col;
+                                        const x = startX + (mirroredCol * (cardW + gap));
+                                        const y = startY + (row * (cardH + gap));
+                                        backItems.push({ i: i, src: card.backSrc, x: x * pxFactor, y: y * pxFactor, w: cardW * pxFactor, h: cardH * pxFactor });
+                                    }
+                                });
+                                pages.push({ w: pW, h: pH, items: backItems });
+                            }
+                        }
+                        this.previewPages = pages;
+                        this.showPreviewModal = true;
+                    } catch (e) {
+                        console.error(e);
+                        this.errorMessage = "Preview failed.";
+                    } finally {
+                        this.isGenerating = false;
+                    }
+                },
+
+                async generatePDF() {
+                    this.isGenerating = true;
+                    this.errorMessage = '';
+                    try {
+                        const doc = new jsPDF({
+                            orientation: 'portrait',
+                            unit: 'mm',
+                            format: this.settings.paperSize
+                        });
+
+                        const pageSize = PAPER_SIZES[this.settings.paperSize];
+                        const pageWidth = pageSize.w;
+                        const pageHeight = pageSize.h;
+
+                        const scale = Number(this.settings.cardScale) / 100;
+                        const cardW = Number(this.settings.cardWidth) * scale;
+                        const cardH = Number(this.settings.cardHeight) * scale;
+                        const gap = Number(this.settings.gapSize);
+                        const bleed = Number(this.settings.bleedMm);
+
+                        let cols = Math.floor((pageWidth - 10) / (cardW + gap));
+                        let rows = Math.floor((pageHeight - 10) / (cardH + gap));
+                        if (cols < 1) cols = 1; if (rows < 1) rows = 1;
+
+                        const gridWidth = (cols * cardW) + ((cols - 1) * gap);
+                        const gridHeight = (rows * cardH) + ((rows - 1) * gap);
+                        const startX = (pageWidth - gridWidth) / 2;
+                        const startY = (pageHeight - gridHeight) / 2;
+                        const itemsPerPage = cols * rows;
+
+                        let printQueue = [];
+                        this.cards.forEach(card => {
+                            for (let i = 0; i < card.qty; i++) {
+                                printQueue.push({ src: card.src, backSrc: card.backSrc, name: card.name });
+                            }
+                        });
+
+                        // Setup hidden canvas for high-res drawing
+                        const canvas = this.$refs.procCanvas;
+                        const ctx = canvas.getContext('2d');
+                        const scaleFactor = 12; // High DPI for print (300dpi approx)
+                        canvas.width = (cardW + (bleed * 2)) * scaleFactor;
+                        canvas.height = (cardH + (bleed * 2)) * scaleFactor;
+
+                        const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
+
+                        for (let b = 0; b < totalBatches; b++) {
+                            if (b > 0) doc.addPage();
+
+                            const batch = printQueue.slice(b * itemsPerPage, (b + 1) * itemsPerPage);
+                            let needsBackPage = this.globalDuplex && this.hasDFC;
+
+                            // Draw Fronts
+                            for (let i = 0; i < batch.length; i++) {
+                                const card = batch[i];
+                                const col = i % cols;
+                                const row = Math.floor(i / cols);
+                                const x = startX + (col * (cardW + gap));
+                                const y = startY + (row * (cardH + gap));
+
+                                await this.drawCardToPDF(doc, ctx, card.src, x, y, cardW, cardH, canvas);
+                                this.drawCutGuides(doc, x, y, cardW, cardH, gap, col, row, cols, rows);
+                            }
+
+                            // Draw Backs (Duplex)
+                            if (needsBackPage) {
+                                doc.addPage();
+                                for (let i = 0; i < batch.length; i++) {
+                                    const card = batch[i];
+                                    const col = i % cols;
+                                    const row = Math.floor(i / cols);
+                                    // Mirror column index for duplex alignment
+                                    const mirroredCol = (cols - 1) - col;
+                                    const x = startX + (mirroredCol * (cardW + gap));
+                                    const y = startY + (row * (cardH + gap));
+
+                                    if (card.backSrc) {
+                                        await this.drawCardToPDF(doc, ctx, card.backSrc, x, y, cardW, cardH, canvas);
+                                        this.drawCutGuides(doc, x, y, cardW, cardH, gap, mirroredCol, row, cols, rows);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Footer
+                        const pageCount = doc.internal.getNumberOfPages();
+                        for (let i = 1; i <= pageCount; i++) {
+                            doc.setPage(i);
+                            doc.setFontSize(8);
+                            doc.setTextColor(this.settings.pageBg === 'black' ? 100 : 150);
+                            doc.text("Images via Scryfall. Proxy tool for personal playtesting only.", 10, pageHeight - 5);
+                        }
+
+                        doc.save('proxies-custom.pdf');
+
+                    } catch (e) {
+                        console.error(e);
+                        this.errorMessage = "Failed to generate PDF. Check console.";
+                    } finally {
+                        this.isGenerating = false;
+                    }
+                },
+
+                drawCutGuides(doc, x, y, w, h, gap, col, row, maxCols, maxRows) {
+                    if (this.settings.cutMarks === 'none') return;
+
+                    const isDark = this.settings.pageBg === 'black';
+                    const color = isDark ? 255 : 150;
+                    doc.setDrawColor(color);
+                    doc.setLineWidth(0.1);
+
+                    if (this.settings.cutMarks === 'dotted') doc.setLineDash([1, 1], 0); else doc.setLineDash([], 0);
+
+                    if (this.settings.cutMarks === 'crosshairs') {
+                        const len = 3;
+                        // Draw L-shapes at corners
+                        doc.line(x - gap / 2, y, x - gap / 2 - len, y); doc.line(x, y - gap / 2, x, y - gap / 2 - len);
+                        doc.line(x + w + gap / 2, y, x + w + gap / 2 + len, y); doc.line(x + w, y - gap / 2, x + w, y - gap / 2 - len);
+                        doc.line(x - gap / 2, y + h, x - gap / 2 - len, y + h); doc.line(x, y + h + gap / 2, x, y + h + gap / 2 + len);
+                        doc.line(x + w + gap / 2, y + h, x + w + gap / 2 + len, y + h); doc.line(x + w, y + h + gap / 2, x + w, y + h + gap / 2 + len);
+                    } else {
+                        // Standard box
+                        doc.rect(x, y, w, h);
+                    }
+                },
+
+                async drawCardToPDF(doc, ctx, src, x, y, w, h, canvas) {
+                    try {
+                        const bleed = this.settings.bleedMm || 0;
+
+                        // Initialize processed data cache
+                        if (!this._processedImgCache) this._processedImgCache = new Map();
+
+                        // Create a unique key based on visual settings
+                        const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+
+                        // Check if we have already processed this exact card image
+                        let croppedData = this._processedImgCache.get(cacheKey);
+
+                        // If not in cache, draw and process it
+                        if (!croppedData) {
+                            const imgObj = await this.loadImage(src);
+
+                            const canvasW = canvas.width;
+                            const canvasH = canvas.height;
+
+                            // Clear and Fill
+                            ctx.clearRect(0, 0, canvasW, canvasH);
+                            ctx.fillStyle = this.settings.pageBg;
+                            ctx.fillRect(0, 0, canvasW, canvasH);
+
+                            // Calculate scaling
+                            const targetRatio = w / h;
+                            const imgRatio = imgObj.width / imgObj.height;
+                            let sWidth, sHeight, sx, sy;
+
+                            if (imgRatio > targetRatio) {
+                                sHeight = imgObj.height; sWidth = sHeight * targetRatio;
+                                sy = 0; sx = (imgObj.width - sWidth) / 2;
+                            } else {
+                                sWidth = imgObj.width; sHeight = sWidth / targetRatio;
+                                sx = 0; sy = (imgObj.height - sHeight) / 2;
+                            }
+                            ctx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, canvasW, canvasH);
+
+                            // Overlay Proxy Marker
+                            if (this.settings.proxyMarker) {
+                                ctx.font = `bold ${canvasH * 0.025}px Arial`;
+                                ctx.fillStyle = "rgba(255,255,255,0.8)";
+                                ctx.textAlign = "center";
+                                ctx.fillText("PROXY", canvasW / 2, canvasH - (canvasH * 0.035));
+                            }
+
+                            // Compress to JPEG (0.9 is faster and sufficient for print)
+                            croppedData = canvas.toDataURL('image/jpeg', 0.90);
+
+                            // Save to cache
+                            this._processedImgCache.set(cacheKey, croppedData);
+                        }
+
+                        // Add the (potentially cached) image data to PDF
+                        doc.addImage(croppedData, 'JPEG', x - bleed, y - bleed, w + (bleed * 2), h + (bleed * 2));
+
+                    } catch (err) {
+                        console.error("Draw Error for:", src, err);
+                        doc.setDrawColor(255, 0, 0);
+                        doc.setLineWidth(0.5);
+                        doc.rect(x, y, w, h);
+                        doc.setFontSize(8);
+                        doc.setTextColor(255, 0, 0);
+                        doc.text("Img Error", x + 2, y + 5);
+                    }
+                },
+
+            }
+        }).mount('#app');
+    </script>
+</body>
+
+</html>
