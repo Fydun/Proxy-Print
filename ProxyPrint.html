@@ -553,6 +553,29 @@
         <!--                            MODALS                                  -->
         <!-- ================================================================== -->
 
+        <!-- 0. Full Size Image Preview -->
+        <Transition enter-active-class="transition ease-out duration-200" enter-from-class="opacity-0 scale-95"
+            enter-to-class="opacity-100 scale-100" leave-active-class="transition ease-in duration-150"
+            leave-from-class="opacity-100 scale-100" leave-to-class="opacity-0 scale-95">
+            <div v-if="previewImage"
+                class="fixed inset-0 z-[100] bg-black bg-opacity-80 flex items-center justify-center p-4 backdrop-blur-sm"
+                @click="previewImage = null">
+                <!-- Close Button -->
+                <button class="absolute top-6 right-6 text-white/50 hover:text-white transition-colors"
+                    @click="previewImage = null">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+
+                <!-- The Image -->
+                <img :src="previewImage"
+                    class="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl cursor-default" @click.stop>
+            </div>
+        </Transition>
+
         <!-- 1. Version Selection Modal -->
         <div v-if="showVersionModal"
             class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
