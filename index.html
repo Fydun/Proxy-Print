@@ -3626,17 +3626,28 @@
           },
 
           isTokenOrHelper(part) {
+            const type = (part.type_line || "").toLowerCase();
+            const name = (part.name || "").toLowerCase();
+
+            // 1. Official Tokens and Meld Results (The giant backside)
             if (part.component === "token") return true;
             if (part.component === "meld_result") return true;
-            if (part.type_line) {
-              const t = part.type_line.toLowerCase();
-              if (
-                t.includes("token") ||
-                t.includes("emblem") ||
-                t.includes("dungeon")
-              )
-                return true;
-            }
+
+            // 2. Mechanics via Name (Monarch, Initiative, City's Blessing, Ring, etc)
+            if (name === "the monarch") return true;
+            if (name === "the initiative") return true;
+            if (name === "the city's blessing") return true;
+            if (name === "day // night") return true;
+            if (name.includes("the ring temps you")) return true;
+            if (name === "the ring") return true; // "The Ring" emblem
+
+            // 3. Card Types (Emblems, Dungeons, Planes)
+            if (type.includes("emblem")) return true;
+            if (type.includes("dungeon")) return true;
+            if (type.includes("plane") && !type.includes("planeswalker"))
+              return true; // Planechase
+            if (type.includes("phenomenon")) return true;
+
             return false;
           },
           async fetchTokensForCard(index) {
@@ -3683,8 +3694,11 @@
               this.isFetchingTokens = false;
             }
           },
-          async fetchAllTokens() {
+async fetchAllTokens() {
             this.isFetchingTokens = true;
+            this.statusMessage = "Scanning deck for tokens and mechanics...";
+            
+            // 1. Identify all cards in the deck to check their parts
             const identifiers = this.cards
               .filter((c) => !(c.set === "Local" && !c.cn))
               .map((c) =>
@@ -3692,16 +3706,21 @@
                   ? { set: c.set, collector_number: c.cn }
                   : { name: c.name },
               );
+
             if (identifiers.length === 0) {
               this.isFetchingTokens = false;
               return;
             }
+
             const BATCH_SIZE = 75;
             const batches = [];
             for (let i = 0; i < identifiers.length; i += BATCH_SIZE)
               batches.push(identifiers.slice(i, i + BATCH_SIZE));
-            const allTokenIds = new Set();
+
+            const tokensToFetchIds = new Set();
+
             try {
+              // 2. Fetch full card objects from Scryfall to inspect 'all_parts'
               for (let batch of batches) {
                 const res = await fetch(
                   "https://api.scryfall.com/cards/collection",
@@ -3712,37 +3731,47 @@
                   },
                 );
                 const data = await res.json();
+
                 if (data.data) {
                   data.data.forEach((c) => {
+                    // Don't fetch tokens for cards that ARE tokens
                     if (
                       c.layout === "token" ||
                       c.layout === "double_faced_token"
                     )
                       return;
+
                     if (c.all_parts) {
                       c.all_parts.forEach((part) => {
                         if (this.isTokenOrHelper(part)) {
-                          allTokenIds.add(part.id);
+                          tokensToFetchIds.add(part.id);
                         }
                       });
                     }
                   });
                 }
-                await new Promise((r) => setTimeout(r, 100));
+                // Be polite to API
+                await new Promise((r) => setTimeout(r, 75));
               }
-              if (allTokenIds.size > 0) {
-                await this.resolveAndAddTokens(Array.from(allTokenIds));
+
+              if (tokensToFetchIds.size > 0) {
+                this.statusMessage = `Found ${tokensToFetchIds.size} tokens/markers. downloading...`;
+                await this.resolveAndAddTokens(Array.from(tokensToFetchIds));
+                this.statusMessage = "Tokens added successfully.";
               } else {
-                this.errorMessage = "No tokens found for this deck.";
+                this.errorMessage = "No tokens or extra parts found for this deck.";
               }
             } catch (e) {
               console.error("Batch token error", e);
-              this.errorMessage = "Failed to fetch all tokens.";
+              this.errorMessage = "Failed to fetch tokens (Network/API Error).";
             } finally {
               this.isFetchingTokens = false;
+              // Clear status after 3s
+              setTimeout(() => { if(!this.errorMessage) this.statusMessage = ""; }, 3000);
             }
-          },
-          async resolveAndAddTokens(tokenIds) {
+          },         
+          
+async resolveAndAddTokens(tokenIds) {
             const BATCH_SIZE = 75;
             const batches = [];
             for (let i = 0; i < tokenIds.length; i += BATCH_SIZE)
@@ -3750,6 +3779,7 @@
 
             for (let batchIds of batches) {
               const identifiers = batchIds.map((id) => ({ id }));
+              
               const res = await fetch(
                 "https://api.scryfall.com/cards/collection",
                 {
@@ -3762,23 +3792,22 @@
 
               if (data.data) {
                 data.data.forEach((token) => {
-                  // --- FIX STARTS HERE ---
-                  // Check against Oracle ID first (handles different versions of same token)
-                  // Fallback to Set/CN for cards that might not have an oracle ID populated
+                  // Check if we already have this token in the deck list
+                  // matching by Oracle ID (best) or Set/CN
                   const exists = this.cards.some((c) => {
-                    if (token.oracle_id && c.oracle_id === token.oracle_id)
-                      return true;
+                    if (token.oracle_id && c.oracle_id === token.oracle_id) return true;
                     return (
                       c.set === token.set.toUpperCase() &&
                       c.cn === token.collector_number
                     );
                   });
-                  // --- FIX ENDS HERE ---
 
                   if (exists) return;
 
                   let src = "",
                     backSrc = null;
+
+                  // Handle double-faced tokens (e.g. Incubator // Phyrexian)
                   if (token.card_faces && token.card_faces[0].image_uris) {
                     src =
                       token.card_faces[0].image_uris.png ||
@@ -3802,25 +3831,29 @@
                       dfcData: null,
                       selected: false,
                       isDuplex: false,
-                      oracle_id: token.oracle_id, // Ensure this is saved (your original code already does this)
+                      oracle_id: token.oracle_id,
                       lang: token.lang,
                       cmc: token.cmc || 0,
                       color: (token.colors || []).join(""),
-                      color_identity: match.color_identity || [],
+                      color_identity: token.color_identity || [],
                       type_line: token.type_line || "",
                     };
-                    if (backSrc)
+                    
+                    if (backSrc) {
                       newCard.dfcData = {
                         frontSrc: src,
                         backSrc: backSrc,
                       };
+                    }
                     this.cards.push(newCard);
                   }
                 });
               }
-              await new Promise((r) => setTimeout(r, 100));
+              await new Promise((r) => setTimeout(r, 75));
             }
           },
+        
+        
           /* --- Version Selection Modal --- */
           async openVersionSelector(index, preserveLang = false) {
             const card = this.cards[index];
