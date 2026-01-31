@@ -1275,42 +1275,102 @@
                 },
                 copyDecklist() { navigator.clipboard.writeText(this.importText); },
 
-                /* --- Sorting Logic --- */
-                calculateColorRank(cStr) {
-                    if (!cStr) return 0; // Colorless
-                    // Normalize string (e.g., "GW" -> "WG" based on WUBRG order)
-                    const order = "WUBRG";
-                    const norm = cStr.split('').sort((a, b) => order.indexOf(a) - order.indexOf(b)).join('');
+                // ---------------------------------------------------------
+                //              NEW SORTING HELPERS & LOGIC
+                // ---------------------------------------------------------
 
-                    // Mono (1-5)
-                    if (norm.length === 1) return 10 + order.indexOf(norm);
+                // Helper: Calculates a score for WUBRG order
+                // Mono: W(1), U(2), B(3), R(4), G(5)
+                // Pairs/Trios are weighted higher to appear after mono colors
+                // --- SORTING HELPERS ---
 
-                    // Pairs
-                    const allied = ['WU', 'UB', 'BR', 'RG', 'WG'];
-                    const enemy = ['WB', 'BG', 'UG', 'UR', 'WR'];
-                    if (norm.length === 2) {
-                        const ai = allied.indexOf(norm);
-                        if (ai !== -1) return 20 + ai;
-                        const ei = enemy.indexOf(norm);
-                        if (ei !== -1) return 30 + ei;
-                        return 39;
-                    }
+                getWUBRGScore(cStr) {
+                    if (!cStr || cStr.length === 0) return 999; // Truly Colorless (Wastes, Sol Ring)
 
-                    // Trios
-                    const shards = ['WGU', 'WUB', 'UBR', 'BRG', 'WRG'];
-                    const wedges = ['WBG', 'WUR', 'UBG', 'WBR', 'URG'];
-                    if (norm.length === 3) {
-                        const si = shards.indexOf(norm);
-                        if (si !== -1) return 40 + si;
-                        const wi = wedges.indexOf(norm);
-                        if (wi !== -1) return 50 + wi;
-                        return 59;
-                    }
-                    return 60 + norm.length;
+                    // Normalize string (e.g., "GW" -> "GW")
+                    // Note: Scryfall usually pre-sorts these, but we ensure it.
+                    const norm = cStr.split('').sort((a, b) => "WUBRG".indexOf(a) - "WUBRG".indexOf(b)).join('');
+
+                    const weights = {
+                        'W': 1, 'U': 2, 'B': 3, 'R': 4, 'G': 5,
+                        // Allied
+                        'WU': 6, 'UB': 7, 'BR': 8, 'RG': 9, 'GW': 10, 'WG': 10,
+                        // Enemy
+                        'WB': 11, 'BW': 11, 'BG': 12, 'GB': 12, 'GU': 13, 'UG': 13, 'UR': 14, 'RU': 14, 'RW': 15, 'WR': 15
+                    };
+
+                    if (weights[norm]) return weights[norm];
+
+                    // 3+ Colors: Sort by length (Trios < 4c < 5c)
+                    return 50 + norm.length;
                 },
 
+                calculateTypeRank(typeLine) {
+                    if (!typeLine) return 99;
+                    let t = typeLine.toLowerCase();
+                    // Remove supertypes to find the "Real" type
+                    t = t.replace(/\b(basic|legendary|ongoing|snow|world)\b/g, '').trim();
+
+                    if (t.includes('battle')) return 1;
+                    if (t.includes('planeswalker')) return 2;
+                    if (t.includes('creature')) return 3;
+                    if (t.includes('sorcery')) return 4;
+                    if (t.includes('instant')) return 5;
+                    if (t.includes('artifact')) return 6;
+                    if (t.includes('enchantment')) return 7;
+                    if (t.includes('land')) return 8;
+                    return 99;
+                },
+
+                calculateColorRank(card) {
+                    const type = (card.type_line || '').toLowerCase();
+                    const castingColors = (card.color || '');
+                    const hasCastingColor = castingColors.length > 0;
+
+                    // Derive Color Identity Signature (Sorted String W->U->B->R->G)
+                    let identitySignature = '';
+                    if (card.color_identity && Array.isArray(card.color_identity)) {
+                        const order = "WUBRG";
+                        identitySignature = [...card.color_identity]
+                            .sort((a, b) => order.indexOf(a) - order.indexOf(b))
+                            .join('');
+                    }
+
+                    let categoryScore = 0;
+                    let signature = castingColors;
+
+                    // 1. COLORED CARDS (Top Priority)
+                    // Includes Creatures, Instants, Colored Artifacts, and Dryad Arbor
+                    if (hasCastingColor) {
+                        categoryScore = 0;
+                        signature = castingColors;
+                    }
+                    // 2. COLORLESS LANDS (Lowest Priority)
+                    // Includes Basics, Shocks, Fetches, Artifact Lands (Tree of Tales)
+                    else if (type.includes('land')) {
+                        categoryScore = 4000;
+                        signature = identitySignature;
+                    }
+                    // 3. COLORLESS ARTIFACTS
+                    // Includes Sol Ring, Signets
+                    else if (type.includes('artifact')) {
+                        categoryScore = 3000;
+                        signature = identitySignature;
+                    }
+                    // 4. TRUE COLORLESS
+                    // Includes Eldrazi, Karn, Ugin
+                    else {
+                        categoryScore = 2000;
+                        signature = identitySignature;
+                    }
+
+                    return categoryScore + this.getWUBRGScore(signature);
+                },
+
+
+
+
                 sortCards(key) {
-                    // Toggle direction if clicking same header
                     if (this.sortState.key === key) {
                         this.sortState.order = this.sortState.order === 'asc' ? 'desc' : 'asc';
                     } else {
@@ -1324,32 +1384,41 @@
                         let valA, valB;
 
                         if (key === 'color') {
-                            valA = this.calculateColorRank(a.color || '');
-                            valB = this.calculateColorRank(b.color || '');
-                            if (valA !== valB) return (valA - valB) * modifier;
-                            return 0; // Fallback to stable sort
-                        }
-
-                        if (key === 'name') {
-                            valA = a.name.toLowerCase(); valB = b.name.toLowerCase();
-                        } else if (key === 'cmc') {
-                            valA = a.cmc || 0; valB = b.cmc || 0;
+                            valA = this.calculateColorRank(a);
+                            valB = this.calculateColorRank(b);
                         } else if (key === 'type') {
-                            valA = (a.type_line || '').toLowerCase(); valB = (b.type_line || '').toLowerCase();
+                            valA = this.calculateTypeRank(a.type_line);
+                            valB = this.calculateTypeRank(b.type_line);
+                        } else if (key === 'name') {
+                            valA = a.name.toLowerCase();
+                            valB = b.name.toLowerCase();
+                        } else if (key === 'cmc') {
+                            valA = a.cmc || 0;
+                            valB = b.cmc || 0;
                         } else if (key === 'dfc') {
-                            valA = !!a.backSrc ? 1 : 0; valB = !!b.backSrc ? 1 : 0;
+                            valA = !!a.backSrc ? 1 : 0;
+                            valB = !!b.backSrc ? 1 : 0;
                         } else if (key === 'tokens') {
                             const isToken = (c) => (c.type_line || '').toLowerCase().includes('token');
-                            valA = isToken(a) ? 1 : 0; valB = isToken(b) ? 1 : 0;
+                            valA = isToken(a) ? 1 : 0;
+                            valB = isToken(b) ? 1 : 0;
+                        } else {
+                            return 0;
                         }
 
                         if (valA < valB) return -1 * modifier;
                         if (valA > valB) return 1 * modifier;
+
+                        // Tiebreaker: Name
+                        if (a.name < b.name) return -1;
+                        if (a.name > b.name) return 1;
                         return 0;
                     });
+
                     this.showSortMenu = false;
                     this.saveSession();
                 },
+
 
                 /* --- File Handling (Drag/Drop/Paste) --- */
                 handlePaste(e) {
@@ -1421,10 +1490,19 @@
                                         backSrc = match.card_faces[1].image_uris?.png || match.card_faces[1].image_uris?.large;
                                     }
                                     const newCard = {
-                                        name: match.name, src: file.src, qty: 1, set: set, cn: cn,
-                                        backSrc: backSrc, showBack: false, isDuplex: false, selected: false,
+                                        name: match.name,
+                                        src: file.src,
+                                        qty: 1,
+                                        set: set,
+                                        cn: cn,
+                                        backSrc: backSrc,
+                                        showBack: false,
+                                        isDuplex: false,
+                                        selected: false,
                                         dfcData: backSrc ? { frontSrc: file.src, backSrc: backSrc } : null,
-                                        oracle_id: match.oracle_id, lang: match.lang,
+                                        oracle_id: match.oracle_id,
+                                        lang: match.lang,
+                                        color_identity: match.color_identity || [],
                                         // Save metadata for sorting
                                         cmc: match.cmc !== undefined ? match.cmc : (match.card_faces ? match.card_faces[0].cmc : 0),
                                         color: match.colors ? match.colors.join('') : (match.card_faces ? (match.card_faces[0].colors || []).join('') : ''),
@@ -1816,6 +1894,7 @@
                                                     oracle_id: scryCard.oracle_id, lang: target.lang,
                                                     cmc: scryCard.cmc !== undefined ? scryCard.cmc : (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
                                                     color: scryCard.colors ? scryCard.colors.join('') : (scryCard.card_faces ? (scryCard.card_faces[0].colors || []).join('') : ''),
+                                                    color_identity: scryCard.color_identity || [],
                                                     type_line: scryCard.type_line || (scryCard.card_faces ? scryCard.card_faces[0].type_line : '')
                                                 };
                                                 if (backSrc) newCard.dfcData = { frontSrc: src, backSrc: backSrc };
@@ -1965,6 +2044,7 @@
                                         lang: token.lang,
                                         cmc: token.cmc || 0,
                                         color: (token.colors || []).join(''),
+                                        color_identity: match.color_identity || [],
                                         type_line: token.type_line || ''
                                     };
                                     if (backSrc) newCard.dfcData = {
@@ -2055,6 +2135,7 @@
                                         lang: c.lang,
                                         cmc: c.cmc !== undefined ? c.cmc : (c.card_faces ? c.card_faces[0].cmc : 0),
                                         color: c.colors ? c.colors.join('') : (c.card_faces ? (c.card_faces[0].colors || []).join('') : ''),
+                                        color_identity: c.color_identity || [],
                                         type_line: c.type_line || (c.card_faces ? c.card_faces[0].type_line : '')
                                     };
                                 });
@@ -2110,6 +2191,7 @@
                         card.cmc = version.cmc;
                         card.color = version.color;
                         card.type_line = version.type_line;
+                        card.color_identity = version.color_identity;
                     }
 
                     this.saveSession(); this.showVersionModal = false; this.activeCardIndex = null;
