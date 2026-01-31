@@ -2784,7 +2784,60 @@
             return categoryScore + this.getWUBRGScore(signature);
           },
 
+          // Helper: Distinguish "Real Cards" (0) from "Extras/Tokens" (1)
+          getCardCategory(card) {
+            const type = (card.type_line || "").toLowerCase();
+            const name = (card.name || "").toLowerCase();
+            const layout = (card.layout || "").toLowerCase();
+
+            // 1. Explicit Types
+            if (type.includes("token")) return 1;
+            if (type.includes("emblem")) return 1;
+            if (type.includes("dungeon")) return 1;
+            if (type.includes("plane") && !type.includes("planeswalker"))
+              return 1;
+            if (type.includes("phenomenon")) return 1;
+            if (type.includes("scheme")) return 1;
+            if (type.includes("vanguard")) return 1;
+
+            // 2. Specific Mechanics (Monarch, Initiative, etc.)
+            const mechanics = [
+              "the monarch",
+              "the initiative",
+              "the city's blessing",
+              "day // night",
+              "the ring", // The Ring emblem
+            ];
+            if (
+              mechanics.some(
+                (m) => name === m || name.includes("the ring tempts you"),
+              )
+            )
+              return 1;
+
+            // 3. Meld Results (The giant backsides)
+            // These look like real creatures but belong in the token pile
+            const meldBacks = [
+              "brisela, voice of nightmares",
+              "hanweir, the writhing township",
+              "chittering host",
+              "withengar unbound",
+              "ormendahl, profane prince",
+              "urza, planeswalker",
+              "mishra, lost to phyrexia",
+              "titania, gaea incarnate",
+            ];
+            if (meldBacks.includes(name)) return 1;
+
+            // 4. Fallback: If Set code starts with 'T' (e.g. TAFR), it's likely a token
+            if (card.set && card.set.startsWith("T") && card.set.length === 4)
+              return 1;
+
+            return 0; // It's a real card
+          },
+
           sortCards(key) {
+            // Toggle order if clicking the same header twice
             if (this.sortState.key === key) {
               this.sortState.order =
                 this.sortState.order === "asc" ? "desc" : "asc";
@@ -2802,6 +2855,7 @@
                 valA = this.calculateColorRank(a);
                 valB = this.calculateColorRank(b);
               } else if (key === "type") {
+                // Determine rank (1=Battle ... 8=Land, 99=Other)
                 valA = this.calculateTypeRank(a.type_line);
                 valB = this.calculateTypeRank(b.type_line);
               } else if (key === "name") {
@@ -2814,10 +2868,9 @@
                 valA = !!a.backSrc ? 1 : 0;
                 valB = !!b.backSrc ? 1 : 0;
               } else if (key === "tokens") {
-                const isToken = (c) =>
-                  (c.type_line || "").toLowerCase().includes("token");
-                valA = isToken(a) ? 1 : 0;
-                valB = isToken(b) ? 1 : 0;
+                // Use new helper to categorize Cards (0) vs Extras (1)
+                valA = this.getCardCategory(a);
+                valB = this.getCardCategory(b);
               } else {
                 return 0;
               }
@@ -2825,16 +2878,14 @@
               if (valA < valB) return -1 * modifier;
               if (valA > valB) return 1 * modifier;
 
-              // Tiebreaker: Name
-              if (a.name < b.name) return -1;
-              if (a.name > b.name) return 1;
+              // STABLE SORT: If values are equal, return 0.
+              // This tells JS to keep them in their current relative positions.
               return 0;
             });
 
             this.showSortMenu = false;
             this.saveSession();
           },
-
           /* --- File Handling (Drag/Drop/Paste) --- */
           handlePaste(e) {
             const items = e.clipboardData.items;
@@ -3694,10 +3745,10 @@
               this.isFetchingTokens = false;
             }
           },
-async fetchAllTokens() {
+          async fetchAllTokens() {
             this.isFetchingTokens = true;
             this.statusMessage = "Scanning deck for tokens and mechanics...";
-            
+
             // 1. Identify all cards in the deck to check their parts
             const identifiers = this.cards
               .filter((c) => !(c.set === "Local" && !c.cn))
@@ -3759,7 +3810,8 @@ async fetchAllTokens() {
                 await this.resolveAndAddTokens(Array.from(tokensToFetchIds));
                 this.statusMessage = "Tokens added successfully.";
               } else {
-                this.errorMessage = "No tokens or extra parts found for this deck.";
+                this.errorMessage =
+                  "No tokens or extra parts found for this deck.";
               }
             } catch (e) {
               console.error("Batch token error", e);
@@ -3767,11 +3819,13 @@ async fetchAllTokens() {
             } finally {
               this.isFetchingTokens = false;
               // Clear status after 3s
-              setTimeout(() => { if(!this.errorMessage) this.statusMessage = ""; }, 3000);
+              setTimeout(() => {
+                if (!this.errorMessage) this.statusMessage = "";
+              }, 3000);
             }
-          },         
-          
-async resolveAndAddTokens(tokenIds) {
+          },
+
+          async resolveAndAddTokens(tokenIds) {
             const BATCH_SIZE = 75;
             const batches = [];
             for (let i = 0; i < tokenIds.length; i += BATCH_SIZE)
@@ -3779,7 +3833,7 @@ async resolveAndAddTokens(tokenIds) {
 
             for (let batchIds of batches) {
               const identifiers = batchIds.map((id) => ({ id }));
-              
+
               const res = await fetch(
                 "https://api.scryfall.com/cards/collection",
                 {
@@ -3795,7 +3849,8 @@ async resolveAndAddTokens(tokenIds) {
                   // Check if we already have this token in the deck list
                   // matching by Oracle ID (best) or Set/CN
                   const exists = this.cards.some((c) => {
-                    if (token.oracle_id && c.oracle_id === token.oracle_id) return true;
+                    if (token.oracle_id && c.oracle_id === token.oracle_id)
+                      return true;
                     return (
                       c.set === token.set.toUpperCase() &&
                       c.cn === token.collector_number
@@ -3838,7 +3893,7 @@ async resolveAndAddTokens(tokenIds) {
                       color_identity: token.color_identity || [],
                       type_line: token.type_line || "",
                     };
-                    
+
                     if (backSrc) {
                       newCard.dfcData = {
                         frontSrc: src,
@@ -3852,8 +3907,7 @@ async resolveAndAddTokens(tokenIds) {
               await new Promise((r) => setTimeout(r, 75));
             }
           },
-        
-        
+
           /* --- Version Selection Modal --- */
           async openVersionSelector(index, preserveLang = false) {
             const card = this.cards[index];
