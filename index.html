@@ -381,177 +381,220 @@
           </div>
 
           <!-- Deck List Grid -->
-<div
-              class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4"
+                     <div
+            v-if="cards.length > 0"
+            class="bg-surface rounded-xl shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700 transition-colors"
+          >
+            <div
+              class="flex justify-between items-center p-4 border-b dark:border-gray-700 bg-secondary sticky top-0 z-10 transition-colors"
+            >
+              <div class="flex items-center gap-3">
+                <h2
+                  class="font-semibold text-primary dark:text-gray-200 flex items-center gap-2"
+                >
+                  <span>Active Deck</span
+                  ><span
+                    class="bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full"
+                    >{{ totalCards }} cards</span
+                  >
+                </h2>
+                <label
+                  class="flex items-center gap-2 text-sm text-muted cursor-pointer hover:text-primary select-none"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="allSelected"
+                    @change="toggleSelectAll"
+                    class="rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Select All
+                </label>
+              </div>
+              <button
+                @click="confirmClear"
+                class="text-red-500 hover:text-red-700 text-sm font-medium flex items-center gap-1"
+              >
+                <app-icon name="trash" class="h-4 w-4"></app-icon>
+                Clear All
+              </button>
+            </div>
+
+            <!-- Card Grid -->
+          <div
+            class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4"
+          >
+            <div
+              v-for="(card, index) in cards"
+              :key="index"
+              class="flex flex-col bg-surface border dark:border-gray-700 rounded-lg hover:shadow-md transition-shadow duration-200 overflow-hidden group"
+              :class="{'ring-2 ring-indigo-500': card.selected, 'opacity-40': draggedCardIndex === index}"
+              draggable="true"
+              @dragstart="onCardDragStart($event, index)"
+              @dragend="onCardDragEnd"
+              @drop.stop="onCardDrop($event, index)"
+              @dragover.prevent
+              @dragenter.prevent
             >
               <div
-                v-for="(card, index) in cards"
-                :key="index"
-                class="flex flex-col bg-surface border dark:border-gray-700 rounded-lg hover:shadow-md transition-shadow duration-200 overflow-hidden group"
-                :class="{'ring-2 ring-indigo-500': card.selected, 'opacity-40': draggedCardIndex === index}"
-                draggable="true"
-                @dragstart="onCardDragStart($event, index)"
-                @dragend="onCardDragEnd"
-                @drop.stop="onCardDrop($event, index)"
-                @dragover.prevent
-                @dragenter.prevent
+                class="relative h-48 bg-page flex items-center justify-center overflow-hidden cursor-zoom-in"
+                @click="previewImage = (card.showBack && card.backSrc) ? card.backSrc : card.src"
               >
-                <div
-                  class="relative h-48 bg-page flex items-center justify-center overflow-hidden cursor-zoom-in"
-                  @click="previewImage = (card.showBack && card.backSrc) ? card.backSrc : card.src"
-                >
-                  <img
-                    :src="(card.showBack && card.backSrc) ? card.backSrc : card.src"
-                    class="w-full h-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
-                    loading="lazy"
+                <img
+                  :src="(card.showBack && card.backSrc) ? card.backSrc : card.src"
+                  class="w-full h-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
+                  loading="lazy"
+                />
+                <div class="absolute top-2 left-2 z-20" @click.stop>
+                  <input
+                    type="checkbox"
+                    v-model="card.selected"
+                    class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-indigo-500 transition-colors"
                   />
-                  <div class="absolute top-2 left-2 z-20" @click.stop>
-                    <input
-                      type="checkbox"
-                      v-model="card.selected"
-                      class="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shadow-sm dark:bg-gray-700 dark:border-gray-600 dark:checked:bg-indigo-500 transition-colors"
-                    />
+                </div>
+                <button
+                  v-if="card.backSrc"
+                  @click.stop="card.showBack = !card.showBack"
+                  class="absolute top-2 right-2 bg-black bg-opacity-50 hover:bg-opacity-70 text-white p-1 rounded-full backdrop-blur-sm transition-all z-10"
+                  title="Swap Face"
+                >
+                  <app-icon name="swap" class="h-4 w-4"></app-icon>
+                </button>
+              </div>
+
+              <div
+                class="p-3 border-t border-line bg-secondary flex-1 flex flex-col justify-between cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                @click="openVersionSelector(index)"
+              >
+                <div class="mb-2">
+                  <div class="flex items-start justify-between gap-1">
+                    <p
+                      class="text-sm font-bold text-primary dark:text-gray-100 leading-tight truncate flex-1"
+                      :title="card.name"
+                    >
+                      {{ card.name }}
+                    </p>
                   </div>
-                  <button
-                    v-if="card.backSrc"
-                    @click.stop="card.showBack = !card.showBack"
-                    class="absolute top-2 right-2 bg-black bg-opacity-50 hover:bg-opacity-70 text-white p-1 rounded-full backdrop-blur-sm transition-all z-10"
-                    title="Swap Face"
-                  >
-                    <app-icon name="swap" class="h-4 w-4"></app-icon>
-                  </button>
+
+                  <div class="flex items-center flex-wrap gap-1.5 mt-2">
+                    <span
+                      v-if="card.set !== 'Local'"
+                      class="text-[10px] font-bold px-2 py-1 rounded bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-200"
+                      :title="card.setName"
+                    >
+                      {{ card.set }}
+                      <span class="opacity-70 font-normal">#{{ card.cn }}</span>
+                    </span>
+
+                    <span
+                      v-else
+                      class="text-[10px] font-bold px-2 py-1 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
+                    >
+                      FILE
+                    </span>
+
+                    <span
+                      v-if="card.lang && card.lang !== 'en'"
+                      class="text-[10px] font-bold px-2 py-1 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 uppercase"
+                    >
+                      {{ card.lang }}
+                    </span>
+
+                    <a
+                      v-if="card.set !== 'Local' && card.set !== 'CUST'"
+                      :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
+                      target="_blank"
+                      @click.stop
+                      class="ml-auto opacity-40 hover:opacity-100 transition-opacity"
+                      title="View on Scryfall"
+                    >
+                      <img
+                        src="assets/Scryfall-Icon.png"
+                        class="w-4 h-4 rounded-full"
+                      />
+                    </a>
+                  </div>
                 </div>
 
                 <div
-                  class="p-3 border-t border-line bg-secondary flex-1 flex flex-col justify-between cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                  @click="openVersionSelector(index)"
-                >
-                  <div class="mb-2">
-                    <div class="flex items-start justify-between gap-1">
-                      <p
-                        class="text-sm font-bold text-primary dark:text-gray-100 leading-tight truncate flex-1"
-                        :title="card.name"
-                      >
-                        {{ card.name }}
-                      </p>
-                    </div>
-                    
-                    <div class="flex items-center flex-wrap gap-1.5 mt-2">
-                        <span
-                            v-if="card.set !== 'Local'"
-                            class="text-[10px] font-bold px-2 py-1 rounded bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-200"
-                            :title="card.setName"
-                        >
-                            {{ card.set }} <span class="opacity-70 font-normal">#{{ card.cn }}</span>
-                        </span>
-                        
-                        <span
-                            v-else
-                            class="text-[10px] font-bold px-2 py-1 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200"
-                        >
-                            FILE
-                        </span>
-
-                        <span
-                            v-if="card.lang && card.lang !== 'en'"
-                            class="text-[10px] font-bold px-2 py-1 rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200 uppercase"
-                        >
-                            {{ card.lang }}
-                        </span>
-
-                        <a
-                          v-if="card.set !== 'Local' && card.set !== 'CUST'"
-                          :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
-                          target="_blank"
-                          @click.stop
-                          class="ml-auto opacity-40 hover:opacity-100 transition-opacity"
-                          title="View on Scryfall"
-                        >
-                            <img src="assets/Scryfall-Icon.png" class="w-4 h-4 rounded-full"/>
-                        </a>
-                    </div>
-                  </div>
-
-                  <div
-                    v-if="card.backSrc || card.dfcData"
-                    class="flex items-center gap-2 mb-2 p-1 rounded min-h-[30px] transition-colors"
-                    :class="
+                  v-if="card.backSrc || card.dfcData"
+                  class="flex items-center gap-2 mb-2 p-1 rounded min-h-[30px] transition-colors"
+                  :class="
                        (globalDuplex && card.backSrc) 
                        ? 'bg-green-100 border border-green-200 dark:bg-green-900/30 dark:border-green-800' 
                        : 'bg-gray-100 border border-gray-200 dark:bg-gray-700/50 dark:border-gray-600'
                     "
-                    @click.stop
+                  @click.stop
+                >
+                  <div
+                    v-if="globalDuplex && card.backSrc"
+                    class="flex-1 flex items-center justify-center gap-1 text-[10px] font-bold text-green-700 dark:text-green-300 py-1"
                   >
-                    <div
-                      v-if="globalDuplex && card.backSrc"
-                      class="flex-1 flex items-center justify-center gap-1 text-[10px] font-bold text-green-700 dark:text-green-300 py-1"
-                    >
-                      <app-icon name="auto-back" class="h-3 w-3"></app-icon>
-                      Auto-Back Active
-                    </div>
+                    <app-icon name="auto-back" class="h-3 w-3"></app-icon>
+                    Auto-Back Active
+                  </div>
+                  <button
+                    v-else-if="card.dfcData && !card.backSrc"
+                    @click.stop="restoreDFC(index)"
+                    class="flex-1 text-[10px] font-bold text-green-600 dark:text-green-400 hover:bg-white/50 dark:hover:bg-white/10 rounded py-1 flex items-center justify-center gap-1 transition-colors"
+                    title="Restore"
+                  >
+                    <app-icon name="swap" class="h-3 w-3"></app-icon>
+                    Restore
+                  </button>
+                  <button
+                    v-else-if="card.backSrc && !globalDuplex"
+                    @click.stop="splitCard(index)"
+                    class="flex-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:bg-white/50 dark:hover:bg-white/10 rounded py-1 flex items-center justify-center gap-1 transition-colors"
+                    title="Split"
+                  >
+                    <app-icon name="split" class="h-3 w-3"></app-icon>
+                    Split
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between" @click.stop>
+                  <div
+                    class="flex items-center border border-line rounded-md overflow-hidden bg-surface shadow-sm"
+                  >
                     <button
-                      v-else-if="card.dfcData && !card.backSrc"
-                      @click.stop="restoreDFC(index)"
-                      class="flex-1 text-[10px] font-bold text-green-600 dark:text-green-400 hover:bg-white/50 dark:hover:bg-white/10 rounded py-1 flex items-center justify-center gap-1 transition-colors"
-                      title="Restore"
+                      @click.stop="card.qty = Math.max(1, card.qty - 1)"
+                      class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 text-muted dark:text-gray-200 border-r dark:border-gray-600 active:bg-gray-200 dark:active:bg-gray-700 transition-colors"
                     >
-                      <app-icon name="swap" class="h-3 w-3"></app-icon>
-                      Restore
+                      -
                     </button>
+                    <input
+                      type="number"
+                      v-model.number="card.qty"
+                      class="w-10 text-center text-sm font-semibold p-1 focus:outline-none bg-surface text-primary"
+                      min="1"
+                      @click.stop
+                    />
                     <button
-                      v-else-if="card.backSrc && !globalDuplex"
-                      @click.stop="splitCard(index)"
-                      class="flex-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:bg-white/50 dark:hover:bg-white/10 rounded py-1 flex items-center justify-center gap-1 transition-colors"
-                      title="Split"
+                      @click.stop="card.qty++"
+                      class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 text-muted dark:text-gray-200 border-l dark:border-gray-600 active:bg-gray-200 dark:active:bg-gray-700 transition-colors"
                     >
-                      <app-icon name="split" class="h-3 w-3"></app-icon>
-                      Split
+                      +
                     </button>
                   </div>
-
-                  <div class="flex items-center justify-between" @click.stop>
-                    <div
-                      class="flex items-center border border-line rounded-md overflow-hidden bg-surface shadow-sm"
+                  <div class="flex items-center gap-1">
+                    <button
+                      @click.stop="fetchTokensForCard(index)"
+                      class="text-gray-400 hover:text-indigo-600 p-1.5 rounded-full hover:bg-indigo-50 dark:hover:bg-gray-700 transition-colors"
+                      title="Add tokens and helper cards"
                     >
-                      <button
-                        @click.stop="card.qty = Math.max(1, card.qty - 1)"
-                        class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 text-muted dark:text-gray-200 border-r dark:border-gray-600 active:bg-gray-200 dark:active:bg-gray-700 transition-colors"
-                      >
-                        -
-                      </button>
-                      <input
-                        type="number"
-                        v-model.number="card.qty"
-                        class="w-10 text-center text-sm font-semibold p-1 focus:outline-none bg-surface text-primary"
-                        min="1"
-                        @click.stop
-                      />
-                      <button
-                        @click.stop="card.qty++"
-                        class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-600 text-muted dark:text-gray-200 border-l dark:border-gray-600 active:bg-gray-200 dark:active:bg-gray-700 transition-colors"
-                      >
-                        +
-                      </button>
-                    </div>
-                    <div class="flex items-center gap-1">
-                      <button
-                        @click.stop="fetchTokensForCard(index)"
-                        class="text-gray-400 hover:text-indigo-600 p-1.5 rounded-full hover:bg-indigo-50 dark:hover:bg-gray-700 transition-colors"
-                        title="Add tokens and helper cards"
-                      >
-                        <app-icon name="tokens" class="h-5 w-5"></app-icon>
-                      </button>
-                      <button
-                        @click.stop="removeCard(index)"
-                        class="text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-red-50 dark:hover:bg-gray-700 transition-colors"
-                      >
-                        <app-icon name="x" class="h-5 w-5"></app-icon>
-                      </button>
-                    </div>
+                      <app-icon name="tokens" class="h-5 w-5"></app-icon>
+                    </button>
+                    <button
+                      @click.stop="removeCard(index)"
+                      class="text-gray-400 hover:text-red-500 p-1.5 rounded-full hover:bg-red-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <app-icon name="x" class="h-5 w-5"></app-icon>
+                    </button>
                   </div>
                 </div>
               </div>
             </div>
+          </div>
         </div>
       </div>
 
@@ -769,6 +812,7 @@
         :version-list="versionList"
         :filtered-versions="filteredVersions"
         :is-fetching-versions="isFetchingVersions"
+        :active-version="activeVersion"
         @refresh-versions="onVersionLangChange"
         @select-version="selectVersion"
         @upload-custom="handleCustomVersionUpload"

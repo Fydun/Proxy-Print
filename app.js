@@ -96,6 +96,7 @@ createApp({
       versionLang: "en",
       versionShowBack: false,
       isDraggingOverModal: false,
+      activeVersion: null,
 
       // Drag & Drop
       isDraggingFile: false,
@@ -1271,8 +1272,16 @@ createApp({
       // 2. Check against existing cards
       for (let target of targets) {
         let existingMatch;
+        const customMatch = this.cards.find(
+          (c) =>
+            (c.set === "CUST" || c.set === "Local") &&
+            (c.name.toLowerCase() === target.name.toLowerCase() ||
+              c.name.toLowerCase().startsWith(target.name.toLowerCase())),
+        );
 
-        if (target.type === "specific") {
+        if (customMatch) {
+          existingMatch = customMatch;
+        } else if (target.type === "specific") {
           existingMatch = this.cards.find(
             (c) =>
               c.set === target.set &&
@@ -1294,8 +1303,10 @@ createApp({
         }
 
         if (existingMatch) {
+          // FIX: Don't re-fetch if it's Local OR Custom
           if (
             existingMatch.set !== "Local" &&
+            existingMatch.set !== "CUST" &&
             existingMatch.cmc === undefined
           ) {
             fetchQueue.push(target);
@@ -1824,6 +1835,25 @@ createApp({
       this.versionList = [];
       this.versionSearchQuery = "";
 
+      // 1. Initialize History Array if missing
+      if (!card.customImages) card.customImages = [];
+
+      // 2. AUTO-SAVE: If current card is Custom/Local, save it to history immediately
+      // This prevents losing it if the user switches to a real card 5 seconds later.
+      if (card.set === "CUST" || card.set === "Local") {
+        if (!card.customImages.includes(card.src)) {
+          card.customImages.unshift(card.src);
+          this.saveSession(); // Save this state so it persists
+        }
+      }
+
+      // 3. Set Active Version for UI Highlighting
+      this.activeVersion = {
+        set: card.set,
+        cn: card.cn,
+        src: card.src,
+      };
+
       if (!preserveLang) {
         this.versionLang = card.lang || "en";
       }
@@ -1831,24 +1861,33 @@ createApp({
       this.isFetchingVersions = true;
       this.versionShowBack = card.name.includes("(Back)");
 
-      if (card.set === "CUST" || card.set === "Local") {
+      // 4. Build Custom Options List from History
+      const customSet = new Set(card.customImages);
+
+      let customIndex = 1;
+      customSet.forEach((src) => {
         this.versionList.push({
-          id: "custom-current",
-          set: card.set,
-          setName: "Current Custom Image",
-          cn: card.cn || "---",
+          id: `custom-${customIndex++}`,
+          set: "CUST",
+          setName: "Custom / Local File",
+          cn: "---",
           year: "Custom",
-          previewSrc: card.src,
-          fullSrc: card.src,
+          previewSrc: src,
+          fullSrc: src,
           backSrc: card.backSrc,
           backPreviewSrc: card.backSrc,
+          name: card.name,
         });
-      }
+      });
 
       const cacheKey =
         card.oracle_id ||
         card.name.replace(" (Front)", "").replace(" (Back)", "");
-      // Skip cache if looking for specific non-english language
+
+      // ... (Rest of the function remains exactly the same as before) ...
+      // Only copy/paste the rest of the function if you deleted it.
+      // Below is the standard fetch logic for reference (you don't need to change it):
+
       if (this.versionCache.has(cacheKey) && this.versionLang === "en") {
         const cached = this.versionCache.get(cacheKey);
         this.versionList.push(...cached);
@@ -1959,24 +1998,33 @@ createApp({
         this.isFetchingVersions = false;
       }
     },
-    handleCustomVersionUpload(event) {
-      const file = event.target.files[0];
+    handleCustomVersionUpload(file) {
       if (!file || this.activeCardIndex === null) return;
+
       const reader = new FileReader();
       reader.onload = (e) => {
         const card = this.cards[this.activeCardIndex];
-        card.src = e.target.result;
+        const newSrc = e.target.result;
+
+        if (!card.customImages) card.customImages = [];
+
+        card.customImages = card.customImages.filter((img) => img !== newSrc);
+        card.customImages.unshift(newSrc);
+
+        card.src = newSrc;
         card.set = "CUST";
+        card.setName = "Custom Image"; // <--- ADD THIS LINE
         card.cn = "";
         card.backSrc = null;
         card.dfcData = null;
+
         this.saveSession();
         this.showVersionModal = false;
         this.activeCardIndex = null;
-        event.target.value = "";
       };
       reader.readAsDataURL(file);
     },
+
     selectVersion(version) {
       if (this.activeCardIndex === null) return;
       const card = this.cards[this.activeCardIndex];

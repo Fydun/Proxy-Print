@@ -3,22 +3,23 @@ import AppIcon from './AppIcon.js';
 export default {
     components: { AppIcon },
     props: [
-        'modelValue',           
-        'versionSearchQuery',   
-        'versionLang',          
-        'versionList',          
-        'versionShowBack',      
-        'filteredVersions',     
-        'isFetchingVersions'    
+        'modelValue',
+        'versionSearchQuery',
+        'versionLang',
+        'versionList',
+        'versionShowBack',
+        'filteredVersions',
+        'isFetchingVersions',
+        'activeVersion' 
     ],
     emits: [
         'update:modelValue',
         'update:versionSearchQuery',
         'update:versionLang',
-        'refresh-versions',     
+        'refresh-versions',
         'update:versionShowBack',
-        'select-version',       
-        'upload-custom'         
+        'select-version',
+        'upload-custom'
     ],
     data() {
         return {
@@ -28,7 +29,6 @@ export default {
         }
     },
     mounted() {
-        // Add global click listener to handle closing the help menu
         window.addEventListener('click', this.handleGlobalClick);
     },
     unmounted() {
@@ -37,18 +37,10 @@ export default {
     methods: {
         handleGlobalClick(e) {
             if (!this.showSearchHelp) return;
-
-            // Refs allow us to check if the click happened inside specific elements
             const menu = this.$refs.helpMenu;
             const input = this.$refs.searchInput;
             const toggle = this.$refs.helpToggle;
-
-            // If click is NOT inside Menu, NOT inside Input, and NOT on the Toggle button -> Close it
-            if (
-                menu && !menu.contains(e.target) && 
-                input && !input.contains(e.target) &&
-                toggle && !toggle.contains(e.target)
-            ) {
+            if (menu && !menu.contains(e.target) && input && !input.contains(e.target) && toggle && !toggle.contains(e.target)) {
                 this.showSearchHelp = false;
             }
         },
@@ -76,6 +68,19 @@ export default {
         onLangChange(e) {
             this.$emit('update:versionLang', e.target.value);
             this.$emit('refresh-versions');
+        },
+
+        //Check if this version is the one currently on the card
+        checkActive(ver) {
+            if (!this.activeVersion) return false;
+            
+            // If checking a Custom/Local card, compare the Image Source
+            if (this.activeVersion.set === 'CUST' || this.activeVersion.set === 'Local') {
+                return ver.fullSrc === this.activeVersion.src;
+            }
+            
+            // Otherwise compare Set and Collector Number
+            return ver.set === this.activeVersion.set && ver.cn === this.activeVersion.cn;
         }
     },
     template: /*html*/`
@@ -104,7 +109,6 @@ export default {
               </div>
               
               <div class="flex-1 w-full sm:w-auto relative flex gap-2 items-center">
-                
                 <div class="relative flex-1" ref="searchInput">
                   <input
                     type="text"
@@ -220,14 +224,22 @@ export default {
                 v-for="ver in filteredVersions"
                 :key="ver.id"
                 @click="$emit('select-version', ver)"
-                class="cursor-pointer group flex flex-col gap-2"
+                class="cursor-pointer group flex flex-col gap-2 relative"
               >
-                <div class="relative bg-surface rounded-lg shadow-sm group-hover:shadow-md transition-shadow overflow-hidden border border-line group-hover:border-blue-400 aspect-[63/88]">
+                <div 
+                  class="relative bg-surface rounded-lg shadow-sm group-hover:shadow-md transition-shadow overflow-hidden border border-line aspect-[63/88]"
+                  :class="checkActive(ver) ? 'ring-4 ring-green-500 ring-offset-2 dark:ring-offset-gray-800' : 'group-hover:border-blue-400'"
+                >
                   <img
                     :src="versionShowBack && ver.backPreviewSrc ? ver.backPreviewSrc : ver.previewSrc"
                     class="w-full h-full object-contain"
                     loading="lazy"
                   />
+                  
+                  <div v-if="checkActive(ver)" class="absolute top-0 right-0 bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-bl shadow-sm">
+                    CURRENT
+                  </div>
+
                   <div class="absolute inset-0 bg-blue-500 bg-opacity-0 group-hover:bg-opacity-10 transition-all"></div>
                   
                   <div v-if="ver.full_art || ver.textless" class="absolute bottom-1 right-1 flex flex-col gap-1 items-end">
@@ -235,6 +247,7 @@ export default {
                     <span v-if="ver.textless" class="bg-black/70 text-white text-[9px] px-1 rounded">Textless</span>
                   </div>
                 </div>
+                
                 <div class="text-center">
                   <div class="text-xs font-bold text-primary dark:text-gray-200 truncate px-1">
                     {{ ver.set }} #{{ ver.cn }}
@@ -252,7 +265,6 @@ export default {
               <p>Loading more versions...</p>
             </div>
           </div>
-
         </div>
       </div>
     `
