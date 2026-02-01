@@ -2426,7 +2426,7 @@
                 if (parsed.preferredVersions) {
                   this.preferredVersions = parsed.preferredVersions;
                 }
-                
+
               }
             } catch (e) {
               console.error("Load error", e);
@@ -3306,7 +3306,7 @@
             }
           },
 
-          async processImport() {
+async processImport() {
             this.isImporting = true;
             this.importStatus = "Analyzing...";
             this.importErrors = [];
@@ -3317,13 +3317,21 @@
               .filter((l) => l.trim() !== "");
             const targets = [];
 
-            // Regex patterns: Quantities are now optional (default to 1)
+            // MATCHERS
+            // 1. Specific: "4 Fire // Ice (DMR) 215"
+            // Note: We Capture the name loosely, then clean it up later.
             const specificRegex =
-              /^(?:(\d+)[x\s]+)?(.+?)\s+\(([a-zA-Z0-9]+)\)\s+([a-zA-Z0-9]+)(?:\s+\[([a-zA-Z]+)\])?$/i;
+              /^(?:(\d+)(?:\s*x\s*|\s+))?(.+?)\s+\(([a-zA-Z0-9]+)\)\s+([a-zA-Z0-9]+)(?:\s+\[([a-zA-Z]+)\])?$/;
+            
+            // 2. Simple: "4 Fire // Ice"
             const simpleRegex =
-              /^(?:(\d+)[x\s]+)?(.+?)(?:\s+\[([a-zA-Z]+)\])?$/i;
+              /^(?:(\d+)(?:\s*x\s*|\s+))?(.+?)(?:\s+\[([a-zA-Z]+)\])?$/;
 
-            // 1. Parse all lines
+            // HELPER: The "Cheat" -> Take only the left side of a split card
+            const simplifyName = (rawName) => {
+              return rawName.split("//")[0].split("/")[0].trim();
+            };
+
             for (let line of lines) {
               line = line.trim();
               if (line.startsWith("//") || line.startsWith("#")) continue;
@@ -3333,7 +3341,8 @@
                 targets.push({
                   type: "specific",
                   qty: match[1] ? parseInt(match[1]) : 1,
-                  name: match[2].trim(),
+                  name: simplifyName(match[2]), // "Fire // Ice" becomes "Fire"
+                  originalName: match[2].trim(), // Keep original for reference
                   set: match[3].trim().toUpperCase(),
                   cn: match[4].trim(),
                   lang: match[5] ? match[5].toLowerCase() : "en",
@@ -3347,16 +3356,17 @@
                 targets.push({
                   type: "simple",
                   qty: match[1] ? parseInt(match[1]) : 1,
-                  name: match[2].trim(),
+                  name: simplifyName(match[2]), // "Fire // Ice" becomes "Fire"
+                  originalName: match[2].trim(),
                   lang: match[3] ? match[3].toLowerCase() : "en",
                   found: false,
                 });
               } else {
-                // Fallback
                 targets.push({
                   type: "simple",
                   qty: 1,
-                  name: line,
+                  name: simplifyName(line),
+                  originalName: line.trim(),
                   lang: "en",
                   found: false,
                 });
@@ -3370,6 +3380,7 @@
             // 2. Check against existing cards
             for (let target of targets) {
               let existingMatch;
+              
               if (target.type === "specific") {
                 existingMatch = this.cards.find(
                   (c) =>
@@ -3378,14 +3389,14 @@
                     (c.lang || "en") === target.lang,
                 );
               } else {
+                // Fuzzy match against existing deck
+                // Check if existing card name STARTS WITH our simplified target name
+                // e.g. Existing: "Fire // Ice", Target: "Fire" -> Match!
                 existingMatch = this.cards.find((c) => {
-                  const cName = c.name.toLowerCase().replace(/ \(.*\)/, "");
-                  // Normalize input name for DFCs (ensure spaces around //)
-                  const tName = target.name
-                    .toLowerCase()
-                    .replace(/\s*\/\/\s*/g, " // ");
+                  const cName = c.name.toLowerCase();
+                  const tName = target.name.toLowerCase();
                   return (
-                    (cName === tName || cName.startsWith(tName + " //")) &&
+                    (cName === tName || cName.startsWith(tName)) &&
                     (c.lang || "en") === target.lang
                   );
                 });
@@ -3410,7 +3421,7 @@
               }
             }
 
-            // 3. Batch fetch missing cards
+            // 3. Fetch missing from Scryfall
             if (fetchQueue.length > 0) {
               const BATCH_SIZE = 75;
               const batches = [];
@@ -3420,13 +3431,12 @@
               for (let batch of batches) {
                 this.importStatus = `Fetching ${batch.length} new cards...`;
 
-                // FIX APPLIED HERE: Normalize name spacing in the identifiers sent to API
                 const identifiers = batch.map((t) => {
                   if (t.type === "specific") {
                     return { set: t.set, collector_number: t.cn };
                   }
-                  // Ensure " // " spacing for DFCs, otherwise Scryfall collection API fails
-                  return { name: t.name.replace(/\s*\/\/\s*/g, " // ") };
+                  // Just send "Fire". Scryfall handles the rest.
+                  return { name: t.name };
                 });
 
                 try {
@@ -3450,54 +3460,42 @@
                             c.collector_number === target.cn,
                         );
                       } else {
-                        // Robust fuzzy match with Normalization
-                        const tName = target.name
-                          .toLowerCase()
-                          .trim()
-                          .replace(/\s*\/\/\s*/g, " // ");
+                        // Match response back to target
+                        // Response: "Fire // Ice", Target: "Fire" -> Match
+                        const tName = target.name.toLowerCase();
                         scryCard = data.data.find((c) => {
                           const cName = c.name.toLowerCase();
+                          // Check exact match, startswith, or face match
                           return (
-                            cName === tName ||
-                            cName.startsWith(tName + " //") ||
-                            (c.card_faces &&
-                              c.card_faces.some(
-                                (f) => f.name.toLowerCase() === tName,
-                              ))
+                            cName === tName || 
+                            cName.startsWith(tName) || 
+                            (c.card_faces && c.card_faces[0].name.toLowerCase() === tName)
                           );
                         });
                       }
 
                       if (scryCard) {
                         target.found = true;
-                        // Handle Language Request
+                        
+                        // Handle Language
                         if (target.lang !== "en") {
                           try {
                             const langRes = await fetch(
                               `https://api.scryfall.com/cards/${scryCard.set}/${scryCard.collector_number}/${target.lang}`,
                             );
                             if (langRes.ok) scryCard = await langRes.json();
-                          } catch (e) {
-                            /* ignore */
-                          }
+                          } catch (e) { /* ignore */ }
                         }
 
                         let src = "",
                           backSrc = null;
-                        if (
-                          scryCard.card_faces &&
-                          scryCard.card_faces[0].image_uris
-                        ) {
-                          src =
-                            scryCard.card_faces[0].image_uris.png ||
-                            scryCard.card_faces[0].image_uris.large;
-                          backSrc =
-                            scryCard.card_faces[1].image_uris?.png ||
-                            scryCard.card_faces[1].image_uris?.large;
+                        
+                        // Image logic
+                        if (scryCard.card_faces && scryCard.card_faces[0].image_uris) {
+                          src = scryCard.card_faces[0].image_uris.png || scryCard.card_faces[0].image_uris.large;
+                          backSrc = scryCard.card_faces[1].image_uris?.png || scryCard.card_faces[1].image_uris?.large;
                         } else {
-                          src =
-                            scryCard.image_uris?.png ||
-                            scryCard.image_uris?.large;
+                          src = scryCard.image_uris?.png || scryCard.image_uris?.large;
                         }
 
                         if (src) {
@@ -3514,29 +3512,19 @@
                             isDuplex: false,
                             oracle_id: scryCard.oracle_id,
                             lang: target.lang,
-                            cmc:
-                              scryCard.cmc !== undefined
-                                ? scryCard.cmc
-                                : scryCard.card_faces
-                                  ? scryCard.card_faces[0].cmc
-                                  : 0,
+                            // Metadata
+                            cmc: scryCard.cmc ?? (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
                             color: scryCard.colors
                               ? scryCard.colors.join("")
                               : scryCard.card_faces
                                 ? (scryCard.card_faces[0].colors || []).join("")
                                 : "",
                             color_identity: scryCard.color_identity || [],
-                            type_line:
-                              scryCard.type_line ||
-                              (scryCard.card_faces
-                                ? scryCard.card_faces[0].type_line
-                                : ""),
+                            type_line: scryCard.type_line || (scryCard.card_faces ? scryCard.card_faces[0].type_line : ""),
                           };
-                          if (backSrc)
-                            newCard.dfcData = {
-                              frontSrc: src,
-                              backSrc: backSrc,
-                            };
+                          if (backSrc) {
+                            newCard.dfcData = { frontSrc: src, backSrc: backSrc };
+                          }
                           nextCards.push(newCard);
                         }
                       }
@@ -3546,33 +3534,33 @@
                   // Handle Not Found
                   if (data.not_found && data.not_found.length > 0) {
                     data.not_found.forEach((nf) => {
-                      // Verify we didn't actually find it via fuzzy match before erroring
+                      // Check if we actually found it despite Scryfall complaining (fuzzy match success)
                       const isActuallyFound = batch.some(
-                        (t) =>
-                          t.found &&
-                          t.name.toLowerCase() === nf.name?.toLowerCase(),
+                        (t) => t.found && (
+                          nf.name?.toLowerCase().includes(t.name.toLowerCase()) || 
+                          t.name.toLowerCase().includes(nf.name?.toLowerCase())
+                        )
                       );
+                      
                       if (!isActuallyFound) {
-                        let name =
-                          nf.name ||
-                          (nf.set
-                            ? `${nf.set} #${nf.collector_number}`
-                            : "Unknown Card");
+                        let name = nf.name || (nf.set ? `${nf.set} #${nf.collector_number}` : "Unknown Card");
+                        // Fallback: try to find which target caused this error using the cleaned name
+                        if (name === "Unknown Card") {
+                           const possibleTarget = batch.find(t => !t.found);
+                           if (possibleTarget) name = possibleTarget.originalName;
+                        }
                         this.importErrors.push(name);
                       }
                     });
                   }
                 } catch (e) {
                   console.error("API Error", e);
-                  this.importErrors.push(
-                    "Network Error - Could not reach Scryfall",
-                  );
+                  this.importErrors.push("Network Error - Could not reach Scryfall");
                 }
                 await new Promise((r) => setTimeout(r, 100));
               }
             }
 
-            // 4. Re-add local files that weren't replaced
             const remainingLocalFiles = this.cards.filter(
               (c) => c.set === "Local" && !usedLocalIds.has(c),
             );
@@ -3581,7 +3569,6 @@
             this.cards = nextCards;
             this.isImporting = false;
 
-            // 5. Final Status
             if (this.importErrors.length > 0) {
               this.importStatus = `Complete. ${this.importErrors.length} cards could not be found.`;
             } else {
@@ -3592,7 +3579,7 @@
               }, 800);
             }
           },
-
+                            
           /* --- Token & DFC Management --- */
           splitCard(index) {
             const card = this.cards[index];
