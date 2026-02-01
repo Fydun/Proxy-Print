@@ -801,14 +801,16 @@
                       >
                         {{ card.name }}
                       </p>
-<a
-  v-if="card.set !== 'Local' && card.set !== 'CUST'"
-  :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
+                      <a
+                        v-if="card.set !== 'Local' && card.set !== 'CUST'"
+                        :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
                         target="_blank"
                         @click.stop
                         class="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity"
                         title="View on Scryfall"
-  ><img src="assets/Scryfall-Icon.png" class="w-4 h-4 rounded-full"
+                        ><img
+                          src="assets/Scryfall-Icon.png"
+                          class="w-4 h-4 rounded-full"
                       /></a>
                     </div>
                     <p class="text-xs text-muted flex items-center gap-1 mt-1">
@@ -2064,6 +2066,18 @@
                 </li>
               </ul>
             </div>
+
+            <div
+              class="mt-6 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-100 dark:border-gray-600 text-xs text-gray-500 dark:text-gray-400"
+            >
+              <p class="font-semibold mb-1">Privacy & Data Storage</p>
+              <p>
+                This application runs entirely in your browser. Your deck lists
+                and settings are stored in your browser's Local Storage so you
+                don't lose your work. No personal data is collected, tracked, or
+                sent to any external server.
+              </p>
+            </div>
           </div>
           <div
             class="p-6 border-t dark:border-gray-700 bg-secondary rounded-b-xl flex justify-end"
@@ -2412,8 +2426,7 @@
                 if (parsed.preferredVersions) {
                   this.preferredVersions = parsed.preferredVersions;
                 }
-
-
+                
               }
             } catch (e) {
               console.error("Load error", e);
