@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css">
     <title>Magic Proxy Printer</title>
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
@@ -32,138 +33,9 @@
         },
       };
     </script>
-    <style>
-      /* THEME VARIABLES - Change colors here to update the whole app */
-      :root {
-        /* Light Mode Defaults */
-        --bg-page: #f3f4f6; /* gray-100 */
-        --bg-surface: #ffffff; /* white */
-        --bg-secondary: #f9fafb; /* gray-50 */
-        --text-main: #1f2937; /* gray-800 */
-        --text-muted: #6b7280; /* gray-500 */
-        --border-color: #e5e7eb; /* gray-200 */
 
-        /* Status Colors (Light) */
-        --status-blue-bg: #eff6ff; /* blue-50 */
-        --status-blue-text: #1d4ed8; /* blue-700 */
-        --status-green-bg: #dcfce7; /* green-100 */
-        --status-green-text: #15803d; /* green-700 */
-      }
 
-      /* Dark Mode Overrides */
-      .dark {
-        --bg-page: #111827; /* gray-900 */
-        --bg-surface: #1f2937; /* gray-800 */
-        --bg-secondary: #374151; /* gray-700 */
-        --text-main: #f3f4f6; /* gray-100 */
-        --text-muted: #9ca3af; /* gray-400 */
-        --border-color: #374151; /* gray-700 */
-
-        /* Status Colors (Dark) - Using transparent colors for better blending */
-        --status-blue-bg: rgba(59, 130, 246, 0.15); /* Subtle Blue */
-        --status-blue-text: #93c5fd; /* blue-300 */
-        --status-green-bg: rgba(34, 197, 94, 0.15); /* Subtle Green */
-        --status-green-text: #86efac; /* green-300 */
-      }
-
-      .dark select {
-        background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
-        background-position: right 0.5rem center;
-        background-repeat: no-repeat;
-        background-size: 1.5em 1.5em;
-        padding-right: 2.5rem;
-        appearance: none;
-      }
-
-      /* Card Preview Styles */
-      .card-preview {
-        width: 63px;
-        height: 88px;
-        object-fit: cover;
-        border-radius: 4px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-        transition: transform 0.3s ease;
-      }
-
-      /* Drag & Drop Zones */
-      .drop-zone {
-        border: 2px dashed #cbd5e1;
-        transition: all 0.2s;
-      }
-
-      .drop-zone:hover,
-      .drop-zone.drag-over {
-        border-color: #3b82f6;
-        background-color: var(
-          --status-blue-bg
-        ); /* Auto-switches based on theme */
-      }
-
-      .card-dragging {
-        opacity: 0.4;
-        border: 2px dashed #6366f1;
-      }
-
-      /* Loading Spinner */
-      .spinner {
-        border: 3px solid rgba(255, 255, 255, 0.3);
-        border-radius: 50%;
-        border-top: 3px solid white;
-        width: 20px;
-        height: 20px;
-        animation: spin 1s linear infinite;
-      }
-
-      @keyframes spin {
-        0% {
-          transform: rotate(0deg);
-        }
-
-        100% {
-          transform: rotate(360deg);
-        }
-      }
-
-      /* Form Element Tweaks */
-      textarea::-webkit-scrollbar {
-        width: 8px;
-      }
-
-      textarea::-webkit-scrollbar-track {
-        background: #f1f1f1;
-      }
-
-      textarea::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
-        border-radius: 4px;
-      }
-
-      textarea::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
-      }
-
-      /* Hide Number Input Spinners */
-      input[type="number"]::-webkit-inner-spin-button,
-      input[type="number"]::-webkit-outer-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-      }
-
-      input[type="number"] {
-        -moz-appearance: textfield;
-      }
-
-      /* Checkbox Styling */
-      .card-checkbox:checked {
-        background-color: #4f46e5;
-        border-color: #4f46e5;
-      }
-
-      .tooltip-trigger:hover .tooltip-content {
-        display: block;
-      }
-    </style>
-  </head>
+</head>
   <body
     class="bg-page min-h-screen p-4 md:p-8 text-primary dark:text-white dark:text-gray-100 pb-24 transition-colors duration-200"
   >
