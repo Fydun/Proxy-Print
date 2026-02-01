@@ -2,6 +2,8 @@ import AppIcon from "./components/AppIcon.js";
 import SettingsModal from "./components/SettingsModal.js";
 import HelpModal from "./components/HelpModal.js";
 import PreviewModal from "./components/PreviewModal.js";
+import ImportModal from "./components/ImportModal.js";
+import VersionSelector from './components/VersionSelector.js';
 
 
 const { createApp } = Vue;
@@ -55,6 +57,8 @@ createApp({
     SettingsModal,
     PreviewModal,
     HelpModal,
+    ImportModal,
+    VersionSelector,
   },
   data() {
     return {
