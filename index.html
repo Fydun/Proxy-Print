@@ -801,14 +801,14 @@
                       >
                         {{ card.name }}
                       </p>
-                      <a
-                        v-if="scryfallIcon && card.set !== 'Local' && card.set !== 'CUST'"
-                        :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
+<a
+  v-if="card.set !== 'Local' && card.set !== 'CUST'"
+  :href="`https://scryfall.com/card/${card.set.toLowerCase()}/${card.cn}${card.lang && card.lang !== 'en' ? '/' + card.lang : ''}`"
                         target="_blank"
                         @click.stop
                         class="flex-shrink-0 opacity-40 hover:opacity-100 transition-opacity"
                         title="View on Scryfall"
-                        ><img :src="scryfallIcon" class="w-4 h-4 rounded-full"
+  ><img src="assets/Scryfall-Icon.png" class="w-4 h-4 rounded-full"
                       /></a>
                     </div>
                     <p class="text-xs text-muted flex items-center gap-1 mt-1">
@@ -2193,7 +2193,6 @@
             // Cache & Preferences
             versionCache: new Map(),
             preferredVersions: {},
-            scryfallIcon: null,
             sortState: { key: "", order: "asc" },
             previewPages: [],
             backdropInteract: false,
@@ -2347,7 +2346,6 @@
           window.addEventListener("dragleave", this.onDragLeave);
           window.addEventListener("drop", this.onGlobalDrop);
           window.addEventListener("paste", this.handlePaste);
-          this.fetchScryfallIcon();
         },
         unmounted() {
           window.removeEventListener("keydown", this.handleKeydown);
@@ -2383,7 +2381,6 @@
                 globalDuplex: this.globalDuplex,
                 settings: this.settings,
                 preferredVersions: this.preferredVersions,
-                scryfallIcon: this.scryfallIcon,
               };
 
               const data = JSON.parse(JSON.stringify(rawData));
@@ -2416,9 +2413,7 @@
                   this.preferredVersions = parsed.preferredVersions;
                 }
 
-                if (parsed.scryfallIcon) {
-                  this.scryfallIcon = parsed.scryfallIcon;
-                }
+
               }
             } catch (e) {
               console.error("Load error", e);
@@ -2477,28 +2472,6 @@
 
             reader.readAsText(file);
             event.target.value = "";
-          },
-
-          async fetchScryfallIcon() {
-            if (this.scryfallIcon) return;
-
-            try {
-              const res = await fetch(
-                "https://scryfall.com/icon.png?v=50f823f108c8",
-              );
-
-              const blob = await res.blob();
-              const reader = new FileReader();
-
-              reader.onloadend = () => {
-                this.scryfallIcon = reader.result;
-                this.saveSession();
-              };
-
-              reader.readAsDataURL(blob);
-            } catch (e) {
-              console.error("Icon fetch failed", e);
-            }
           },
 
           /* --- UI Interaction --- */
