@@ -2143,7 +2143,7 @@ createApp({
       }
     },
 
-    async generatePDF() {
+async generatePDF() {
       this.isGenerating = true;
       this.errorMessage = "";
       try {
@@ -2194,6 +2194,9 @@ createApp({
 
         const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
 
+        // 1. Create a Set to track pages that have no actual cards on them
+        const emptyPages = new Set();
+
         for (let b = 0; b < totalBatches; b++) {
           if (b > 0) doc.addPage();
 
@@ -2238,6 +2241,15 @@ createApp({
           // Draw Backs (Duplex)
           if (needsBackPage) {
             doc.addPage();
+
+            // 2. Check if this specific batch has ANY back faces to print
+            const hasBacksInBatch = batch.some((card) => card.backSrc);
+            
+            // If no cards in this batch have a backSrc, mark this page as empty
+            if (!hasBacksInBatch) {
+              emptyPages.add(doc.internal.getNumberOfPages());
+            }
+
             for (let i = 0; i < batch.length; i++) {
               const card = batch[i];
               const col = i % cols;
@@ -2278,6 +2290,9 @@ createApp({
         // Footer
         const pageCount = doc.internal.getNumberOfPages();
         for (let i = 1; i <= pageCount; i++) {
+          // 3. Skip writing text if this page was marked as empty
+          if (emptyPages.has(i)) continue;
+
           doc.setPage(i);
           doc.setFontSize(8);
           doc.setTextColor(this.settings.pageBg === "black" ? 100 : 150);
@@ -2296,6 +2311,9 @@ createApp({
         this.isGenerating = false;
       }
     },
+
+
+
 
     drawCutGuides(doc, x, y, w, h, gap, col, row, maxCols, maxRows) {
       if (this.settings.cutMarks === "none") return;
