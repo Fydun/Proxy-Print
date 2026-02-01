@@ -1,4 +1,8 @@
 import AppIcon from "./components/AppIcon.js";
+import SettingsModal from "./components/SettingsModal.js";
+import HelpModal from "./components/HelpModal.js";
+import PreviewModal from "./components/PreviewModal.js";
+
 
 const { createApp } = Vue;
 const { jsPDF } = window.jspdf;
@@ -46,7 +50,12 @@ const loadFromDB = () => {
 };
 
 createApp({
-  components: { AppIcon },
+  components: {
+    AppIcon,
+    SettingsModal,
+    PreviewModal,
+    HelpModal,
+  },
   data() {
     return {
       // Deck State
@@ -2143,7 +2152,7 @@ createApp({
       }
     },
 
-async generatePDF() {
+    async generatePDF() {
       this.isGenerating = true;
       this.errorMessage = "";
       try {
@@ -2244,7 +2253,7 @@ async generatePDF() {
 
             // 2. Check if this specific batch has ANY back faces to print
             const hasBacksInBatch = batch.some((card) => card.backSrc);
-            
+
             // If no cards in this batch have a backSrc, mark this page as empty
             if (!hasBacksInBatch) {
               emptyPages.add(doc.internal.getNumberOfPages());
@@ -2311,9 +2320,6 @@ async generatePDF() {
         this.isGenerating = false;
       }
     },
-
-
-
 
     drawCutGuides(doc, x, y, w, h, gap, col, row, maxCols, maxRows) {
       if (this.settings.cutMarks === "none") return;
