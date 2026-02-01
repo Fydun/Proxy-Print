@@ -1,27 +1,27 @@
-import AppIcon from './AppIcon.js';
+import AppIcon from "./AppIcon.js";
 
 export default {
-    components: { AppIcon },
-    props: ['modelValue'],
-    emits: ['update:modelValue'],
-    data() {
-        return { backdropInteract: false }
+  components: { AppIcon },
+  props: ["modelValue"],
+  emits: ["update:modelValue"],
+  data() {
+    return { backdropInteract: false };
+  },
+  methods: {
+    handleBackdropMouseDown(e) {
+      this.backdropInteract = e.target === e.currentTarget;
     },
-    methods: {
-        handleBackdropMouseDown(e) {
-            this.backdropInteract = e.target === e.currentTarget;
-        },
-        close() {
-            if (this.backdropInteract) {
-                this.$emit('update:modelValue', false);
-            }
-            this.backdropInteract = false;
-        },
-        forceClose() {
-            this.$emit('update:modelValue', false);
-        }
+    close() {
+      if (this.backdropInteract) {
+        this.$emit("update:modelValue", false);
+      }
+      this.backdropInteract = false;
     },
-    template: /*html*/`
+    forceClose() {
+      this.$emit("update:modelValue", false);
+    },
+  },
+  template: /*html*/ `
       <div
         v-if="modelValue"
         class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
@@ -56,6 +56,8 @@ export default {
                 <li><strong>Change Version:</strong> Click any card to swap art/set or language.</li>
                 <li><strong>Custom Art:</strong> In the version selector, click "Upload" or drag an image onto the modal.</li>
                 <li><strong>Mass Edit:</strong> Use the "Select All" checkbox or click checkboxes on cards to change language or delete in bulk.</li>
+                <li><strong>DFC Support:</strong> Print different amount of front and backsides, from diffeent sets, or use the Duplex option for double-sided printing.</li>
+
               </ul>
             </div>
             <hr class="dark:border-gray-600" />
@@ -81,5 +83,5 @@ export default {
 
         </div>
       </div>
-    `
-}
+    `,
+};

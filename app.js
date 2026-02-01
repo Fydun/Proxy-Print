@@ -266,8 +266,6 @@ createApp({
     //Wait for saved settings to load from IndexedDB
     await this.loadSession();
 
-
-
     //Attach Event Listeners
     window.addEventListener("keydown", this.handleKeydown);
     window.addEventListener("dragenter", this.onDragEnter);
@@ -892,6 +890,7 @@ createApp({
               }
               const newCard = {
                 name: match.name,
+                setName: match.set_name,
                 src: file.src,
                 qty: 1,
                 set: set,
@@ -1404,6 +1403,7 @@ createApp({
                     const newCard = {
                       name: scryCard.name,
                       set: scryCard.set.toUpperCase(),
+                      setName: scryCard.set_name,
                       cn: scryCard.collector_number,
                       src,
                       backSrc,
@@ -1496,56 +1496,92 @@ createApp({
     splitCard(index) {
       const card = this.cards[index];
       if (!card.backSrc) return;
-      if (!card.dfcData)
+
+      // 1. Prepare DFC Data
+      if (!card.dfcData) {
         card.dfcData = { frontSrc: card.src, backSrc: card.backSrc };
+      }
+      if (!card.dfcData.originalName) {
+        card.dfcData.originalName = card.name;
+      }
+
+      // 2. Determine Clean Names
+      // We explicitly look for the separator.
+      const separator = " // ";
+      let frontName = card.name;
+      let backName = card.name; // Default fallback
+
+      if (card.name.includes(separator)) {
+        const parts = card.name.split(separator);
+        frontName = parts[0];
+        backName = parts[1];
+      } else {
+        // Fallback: If no separator, append markers so user knows which is which
+        // (Only happens for custom files or single-name DFCs)
+        frontName = card.name + " (Front)";
+        backName = card.name + " (Back)";
+      }
+
+      // 3. Create Back Card
       const backCard = {
-        name: card.name + " (Back)",
+        name: backName,
         src: card.backSrc,
         qty: card.qty,
         set: card.set,
         cn: card.cn,
-        backSrc: null,
+        setName: card.setName,
+        backSrc: null, // Single-sided
         showBack: false,
         dfcData: { ...card.dfcData },
         selected: false,
         oracle_id: card.oracle_id,
         lang: card.lang,
+        cmc: card.cmc,
+        color: card.color,
+        type_line: card.type_line,
+        isBackFace: true, // <--- FLAG
       };
-      card.name = card.name + " (Front)";
-      card.backSrc = null;
+
+      // 4. Update Front Card
+      card.name = frontName;
+      card.backSrc = null; // Single-sided
+      card.isFrontFace = true; // <--- FLAG
+
+      // 5. Insert
       this.cards.splice(index + 1, 0, backCard);
     },
     restoreDFC(index) {
       const card = this.cards[index];
       if (!card.dfcData) return;
-      const baseName = card.name.replace(" (Front)", "").replace(" (Back)", "");
-      // Remove partner if it exists next to it
-      if (card.name.includes(" (Front)")) {
-        const expectedBackName = baseName + " (Back)";
-        if (index + 1 < this.cards.length) {
-          const nextCard = this.cards[index + 1];
-          if (
-            nextCard.name === expectedBackName ||
-            nextCard.oracle_id === card.oracle_id
-          ) {
-            this.cards.splice(index + 1, 1);
-          }
-        }
-      } else if (card.name.includes(" (Back)")) {
-        const expectedFrontName = baseName + " (Front)";
-        if (index - 1 >= 0) {
-          const prevCard = this.cards[index - 1];
-          if (
-            prevCard.name === expectedFrontName ||
-            prevCard.oracle_id === card.oracle_id
-          ) {
-            this.cards.splice(index - 1, 1);
-          }
-        }
+
+      // 1. Identify Partner
+      let partnerIndex = -1;
+      if (
+        index + 1 < this.cards.length &&
+        this.cards[index + 1].oracle_id === card.oracle_id
+      ) {
+        partnerIndex = index + 1;
+      } else if (
+        index > 0 &&
+        this.cards[index - 1].oracle_id === card.oracle_id
+      ) {
+        partnerIndex = index - 1;
       }
+
+      // 2. Remove Partner
+      if (partnerIndex !== -1) {
+        this.cards.splice(partnerIndex, 1);
+      }
+
+      // 3. Restore
+      card.name = card.dfcData.originalName || card.name;
       card.src = card.dfcData.frontSrc;
       card.backSrc = card.dfcData.backSrc;
-      card.name = baseName;
+
+      // 4. CLEANUP FLAGS (Crucial!)
+      delete card.isFrontFace;
+      delete card.isBackFace;
+
       this.saveSession();
     },
     groupDFCs() {
@@ -1864,6 +1900,7 @@ createApp({
               }
               return {
                 id: c.id,
+                name: c.name,
                 set: c.set.toUpperCase(),
                 setName: c.set_name,
                 cn: c.collector_number,
@@ -1944,8 +1981,11 @@ createApp({
       if (this.activeCardIndex === null) return;
       const card = this.cards[this.activeCardIndex];
 
+      // 1. Update Metadata
       if (version.id !== "custom-current" && version.set !== "CUST") {
-        this.preferredVersions[card.name] = {
+        this.preferredVersions[
+          card.dfcData ? card.dfcData.originalName : card.name
+        ] = {
           set: version.set,
           cn: version.cn,
           src: version.fullSrc,
@@ -1954,31 +1994,70 @@ createApp({
         };
       }
 
-      const isSplitBack = card.name.includes("(Back)");
       card.set = version.set;
+      card.setName = version.setName;
       card.cn = version.cn;
       card.lang = version.lang;
 
-      if (isSplitBack) card.src = version.backSrc || version.fullSrc;
-      else card.src = version.fullSrc;
-      if (version.backSrc) {
-        card.backSrc =
-          isSplitBack || card.name.includes("(Front)") ? null : version.backSrc;
-        card.dfcData = {
-          frontSrc: version.fullSrc,
-          backSrc: version.backSrc,
-        };
-      } else {
-        card.backSrc = null;
-        card.dfcData = null;
-      }
-
-      // Apply Sorting Metadata
+      // Update Stats
       if (version.cmc !== undefined) {
         card.cmc = version.cmc;
         card.color = version.color;
         card.type_line = version.type_line;
         card.color_identity = version.color_identity;
+      }
+
+      // 2. Logic for SPLIT Cards (Front or Back halves)
+      if (card.isFrontFace || card.isBackFace) {
+        // Determine the correct name for this face
+        let newFaceName = version.name; // Default to full name
+        if (version.name && version.name.includes(" // ")) {
+          const parts = version.name.split(" // ");
+          newFaceName = card.isBackFace ? parts[1] || parts[0] : parts[0];
+        }
+        card.name = newFaceName;
+
+        // Determine the correct image
+        if (card.isBackFace) {
+          // If we are the back face, take the back image (or front if no back exists)
+          card.src = version.backSrc || version.fullSrc;
+        } else {
+          // If we are front face, always take front
+          card.src = version.fullSrc;
+        }
+
+        // IMPORTANT: Ensure it stays single-sided!
+        card.backSrc = null;
+
+        // Update the DFC Reference so Restore works correctly later
+        if (card.dfcData) {
+          card.dfcData.frontSrc = version.fullSrc;
+          card.dfcData.backSrc = version.backSrc;
+          card.dfcData.originalName = version.name;
+        }
+      } else {
+        // 3. Logic for Standard Cards (Whole)
+        card.name = version.name || card.name;
+
+        const isVisualBack = card.name.includes("(Back)"); // Legacy check
+
+        if (isVisualBack) card.src = version.backSrc || version.fullSrc;
+        else card.src = version.fullSrc;
+
+        if (version.backSrc) {
+          card.backSrc =
+            isVisualBack || card.name.includes("(Front)")
+              ? null
+              : version.backSrc;
+          card.dfcData = {
+            frontSrc: version.fullSrc,
+            backSrc: version.backSrc,
+            originalName: version.name,
+          };
+        } else {
+          card.backSrc = null;
+          card.dfcData = null;
+        }
       }
 
       this.saveSession();
