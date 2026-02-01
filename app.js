@@ -1,3 +1,5 @@
+import AppIcon from "./components/AppIcon.js";
+
 const { createApp } = Vue;
 const { jsPDF } = window.jspdf;
 
@@ -44,6 +46,7 @@ const loadFromDB = () => {
 };
 
 createApp({
+  components: { AppIcon },
   data() {
     return {
       // Deck State
