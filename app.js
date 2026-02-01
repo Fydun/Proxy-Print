@@ -3,8 +3,7 @@ import SettingsModal from "./components/SettingsModal.js";
 import HelpModal from "./components/HelpModal.js";
 import PreviewModal from "./components/PreviewModal.js";
 import ImportModal from "./components/ImportModal.js";
-import VersionSelector from './components/VersionSelector.js';
-
+import VersionSelector from "./components/VersionSelector.js";
 
 const { createApp } = Vue;
 const { jsPDF } = window.jspdf;
@@ -164,7 +163,6 @@ createApp({
           }
           let match = false;
 
-          // Handle advanced syntax (set:abc, frame:old)
           if (term.includes(":")) {
             const [key, val] = term.split(":");
             if (!val) return true;
@@ -179,7 +177,16 @@ createApp({
                   ver.setName.toLowerCase().includes(val);
                 break;
               case "frame":
-                match = ver.frame && ver.frame.includes(val);
+                if (val === "old") {
+                  match = ["1993", "1997"].includes(ver.frame);
+                } else if (val === "modern") {
+                  match = ver.frame === "2003";
+                } else if (["new", "ori", "origin"].includes(val)) {
+                  match = ver.frame === "2015";
+                } else {
+                  // Fallback: Allows 1993, 2015, future, etc to match themselves directly
+                  match = ver.frame && ver.frame.includes(val);
+                }
                 break;
               case "border":
                 match = ver.border && ver.border.includes(val);
@@ -245,8 +252,10 @@ createApp({
         }
         if (newVal.darkMode) {
           document.documentElement.classList.add("dark");
+          localStorage.setItem("darkMode", "true");
         } else {
           document.documentElement.classList.remove("dark");
+          localStorage.setItem("darkMode", "false");
         }
         this.saveSession();
       },
@@ -254,15 +263,12 @@ createApp({
     },
   },
   async mounted() {
-    // 1. Wait for saved settings to load from IndexedDB
+    //Wait for saved settings to load from IndexedDB
     await this.loadSession();
 
-    // 2. Apply Dark Mode if it was enabled in the saved settings
-    if (this.settings.darkMode) {
-      document.documentElement.classList.add("dark");
-    }
 
-    // 3. Attach Event Listeners
+
+    //Attach Event Listeners
     window.addEventListener("keydown", this.handleKeydown);
     window.addEventListener("dragenter", this.onDragEnter);
     window.addEventListener("dragover", this.onDragOver);

@@ -1,64 +1,84 @@
-import AppIcon from "./AppIcon.js";
+import AppIcon from './AppIcon.js';
 
 export default {
-  components: { AppIcon },
-  props: [
-    "modelValue", // Visibility
-    "versionSearchQuery", // Search input text
-    "versionLang", // Language selection
-    "versionList", // Full list (used to check if backs exist)
-    "versionShowBack", // Toggle state for Backs/Fronts
-    "filteredVersions", // The actual list being displayed
-    "isFetchingVersions", // Loading spinner state
-  ],
-  emits: [
-    "update:modelValue",
-    "update:versionSearchQuery",
-    "update:versionLang",
-    "refresh-versions", // When language changes
-    "update:versionShowBack",
-    "select-version", // When a card is clicked
-    "upload-custom", // When a file is dropped or selected
-  ],
-  data() {
-    return {
-      backdropInteract: false,
-      // We moved these here because only the modal cares about them!
-      showSearchHelp: false,
-      isDraggingOverModal: false,
-    };
-  },
-  methods: {
-    handleBackdropMouseDown(e) {
-      this.backdropInteract = e.target === e.currentTarget;
+    components: { AppIcon },
+    props: [
+        'modelValue',           
+        'versionSearchQuery',   
+        'versionLang',          
+        'versionList',          
+        'versionShowBack',      
+        'filteredVersions',     
+        'isFetchingVersions'    
+    ],
+    emits: [
+        'update:modelValue',
+        'update:versionSearchQuery',
+        'update:versionLang',
+        'refresh-versions',     
+        'update:versionShowBack',
+        'select-version',       
+        'upload-custom'         
+    ],
+    data() {
+        return {
+            backdropInteract: false,
+            showSearchHelp: false,
+            isDraggingOverModal: false
+        }
     },
-    close() {
-      if (this.backdropInteract) {
-        this.$emit("update:modelValue", false);
-      }
-      this.backdropInteract = false;
+    mounted() {
+        // Add global click listener to handle closing the help menu
+        window.addEventListener('click', this.handleGlobalClick);
     },
-    forceClose() {
-      this.$emit("update:modelValue", false);
+    unmounted() {
+        window.removeEventListener('click', this.handleGlobalClick);
     },
-    // Handle file input changes
-    handleFileUpload(e) {
-      const file = e.target.files[0];
-      if (file) this.$emit("upload-custom", file); // Emits CLEAN file
+    methods: {
+        handleGlobalClick(e) {
+            if (!this.showSearchHelp) return;
+
+            // Refs allow us to check if the click happened inside specific elements
+            const menu = this.$refs.helpMenu;
+            const input = this.$refs.searchInput;
+            const toggle = this.$refs.helpToggle;
+
+            // If click is NOT inside Menu, NOT inside Input, and NOT on the Toggle button -> Close it
+            if (
+                menu && !menu.contains(e.target) && 
+                input && !input.contains(e.target) &&
+                toggle && !toggle.contains(e.target)
+            ) {
+                this.showSearchHelp = false;
+            }
+        },
+        handleBackdropMouseDown(e) {
+            this.backdropInteract = e.target === e.currentTarget;
+        },
+        close() {
+            if (this.backdropInteract) {
+                this.$emit('update:modelValue', false);
+            }
+            this.backdropInteract = false;
+        },
+        forceClose() {
+            this.$emit('update:modelValue', false);
+        },
+        handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (file) this.$emit('upload-custom', file);
+        },
+        handleDrop(e) {
+            this.isDraggingOverModal = false;
+            const file = e.dataTransfer.files[0];
+            if (file) this.$emit('upload-custom', file);
+        },
+        onLangChange(e) {
+            this.$emit('update:versionLang', e.target.value);
+            this.$emit('refresh-versions');
+        }
     },
-    // Handle Drag & Drop events
-    handleDrop(e) {
-      this.isDraggingOverModal = false;
-      const file = e.dataTransfer.files[0];
-      if (file) this.$emit("upload-custom", file);
-    },
-    // Handle Language Change (Two steps: update value, then refresh)
-    onLangChange(e) {
-      this.$emit("update:versionLang", e.target.value);
-      this.$emit("refresh-versions");
-    },
-  },
-  template: /*html*/ `
+    template: /*html*/`
       <div
         v-if="modelValue"
         class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm transition-opacity"
@@ -85,7 +105,7 @@ export default {
               
               <div class="flex-1 w-full sm:w-auto relative flex gap-2 items-center">
                 
-                <div class="relative flex-1">
+                <div class="relative flex-1" ref="searchInput">
                   <input
                     type="text"
                     :value="versionSearchQuery"
@@ -117,6 +137,7 @@ export default {
 
                 <div class="tooltip-trigger relative">
                   <button
+                    ref="helpToggle"
                     @click="showSearchHelp = !showSearchHelp"
                     class="w-8 h-8 rounded-full border border-line text-muted flex items-center justify-center hover:bg-gray-100 hover:text-indigo-600 transition-colors"
                   >
@@ -124,22 +145,22 @@ export default {
                   </button>
                   <div
                     v-if="showSearchHelp"
+                    ref="helpMenu"
                     class="absolute top-10 right-0 z-50 w-72 bg-surface rounded-lg shadow-xl border border-line p-4 text-sm text-muted leading-relaxed"
-                    @click.stop
                   >
                     <div class="flex justify-between items-center mb-2">
                       <h4 class="font-bold text-primary">Search Options</h4>
                       <button @click="showSearchHelp = false" class="text-gray-400 hover:text-muted">&times;</button>
                     </div>
                     <ul class="space-y-1">
-                      <li><code class="bg-gray-100 px-1 rounded">set:lea</code> (Set Code)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">year:1995</code> (Release Year)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">frame:old</code> (Old Frame)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">border:black</code> (Border Color)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">artist:guay</code> (Artist Name)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">is:fullart</code> (Full Art)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">is:textless</code> (Textless)</li>
-                      <li><code class="bg-gray-100 px-1 rounded">-set:sld</code> (Negate)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">set:lea</code> (Set Code)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">year:1995</code> (Release Year)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">frame:old</code> (Old Frame)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">border:black</code> (Border Color)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">artist:guay</code> (Artist Name)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">is:fullart</code> (Full Art)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">is:textless</code> (Textless)</li>
+                      <li><code class="bg-gray-100 dark:bg-gray-700 dark:text-gray-200 px-1 rounded">-set:sld</code> (Negate)</li>
                     </ul>
                   </div>
                 </div>
@@ -234,5 +255,5 @@ export default {
 
         </div>
       </div>
-    `,
-};
+    `
+}

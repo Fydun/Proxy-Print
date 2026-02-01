@@ -9,6 +9,20 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+      // 1. Check LocalStorage instantly
+      // 2. If nothing found, check System Preference
+      if (
+        localStorage.getItem("darkMode") === "true" ||
+        (!("darkMode" in localStorage) &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches)
+      ) {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    </script>
 
     <script>
       tailwind.config = {
