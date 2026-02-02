@@ -3,7 +3,7 @@ import SettingsModal from "./components/SettingsModal.js";
 import HelpModal from "./components/HelpModal.js";
 import PreviewModal from "./components/PreviewModal.js";
 import ImportModal from "./components/ImportModal.js";
-import VersionSelector from "./components/VersionSelector.js";
+import VersionSelectModal from "./components/VersionSelectModal.js";
 
 const { createApp } = Vue;
 const { jsPDF } = window.jspdf;
@@ -57,7 +57,7 @@ createApp({
     PreviewModal,
     HelpModal,
     ImportModal,
-    VersionSelector,
+    VersionSelectModal,
   },
   data() {
     return {
@@ -1828,7 +1828,7 @@ createApp({
     },
 
     /* --- Version Selection Modal --- */
-    async openVersionSelector(index, preserveLang = false) {
+    async openVersionSelectModal(index, preserveLang = false) {
       const card = this.cards[index];
       this.activeCardIndex = index;
       this.showVersionModal = true;
@@ -2115,7 +2115,7 @@ createApp({
     onVersionLangChange() {
       if (this.activeCardIndex !== null) {
         this.versionCache.clear();
-        this.openVersionSelector(this.activeCardIndex, true);
+        this.openVersionSelectModal(this.activeCardIndex, true);
       }
     },
     handleVersionDrop(e) {

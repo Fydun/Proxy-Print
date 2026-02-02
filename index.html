@@ -463,7 +463,7 @@
 
                 <div
                   class="p-3 border-t border-line bg-secondary flex-1 flex flex-col justify-between cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                  @click="openVersionSelector(index)"
+                  @click="openVersionSelectModal(index)"
                 >
                   <div class="mb-2">
                     <div class="flex items-start justify-between gap-1">
@@ -807,7 +807,7 @@
       </Transition>
 
       <!-- 1. Version Selection Modal -->
-      <version-selector
+      <version-select-modal
         v-model="showVersionModal"
         v-model:version-search-query="versionSearchQuery"
         v-model:version-lang="versionLang"
@@ -819,7 +819,7 @@
         @refresh-versions="onVersionLangChange"
         @select-version="selectVersion"
         @upload-custom="handleCustomVersionUpload"
-      ></version-selector>
+      ></version-select-modal>
 
       <!-- 2. Import / Deck Editor Modal -->
       <import-modal
