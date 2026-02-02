@@ -69,9 +69,10 @@ export default {
                 <li><strong>Settings:</strong> Click the gear icon to change Paper Size (A4/Letter), Cut Lines, or Bleed.</li>
               </ul>
             </div>
+            
             <div class="mt-6 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-100 dark:border-gray-600 text-xs text-gray-500 dark:text-gray-400">
               <p class="font-semibold mb-1">Privacy & Data Storage</p>
-              <p>This application runs entirely in your browser. Your deck lists and settings are stored in your browser's Local Storage so you don't lose your work. No personal data is collected, tracked, or sent to any external server.</p>
+              <p>This application runs entirely in your browser. Your deck lists and custom images are stored on your device using IndexedDB. User settings are saved via LocalStorage. No data is transmitted to, processed by, or stored on any external server.</p>
             </div>
           </div>
 
