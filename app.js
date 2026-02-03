@@ -2289,9 +2289,16 @@ createApp({
       }
     },
 
-    async generatePDF() {
+async generatePDF() {
+      if (this.cards.length === 0) return;
+      
       this.isGenerating = true;
       this.errorMessage = "";
+      this.statusMessage = "Initializing PDF generation..."; // Notify user start
+      
+      // Allow UI to update before heavy lifting starts
+      await new Promise(r => setTimeout(r, 50));
+
       try {
         const doc = new jsPDF({
           orientation: "portrait",
@@ -2331,18 +2338,17 @@ createApp({
           }
         });
 
-        // Setup hidden canvas for high-res drawing
         const canvas = this.$refs.procCanvas;
-        const ctx = canvas.getContext("2d");
-        const scaleFactor = 12; // High DPI for print (300dpi approx)
+        const ctx = canvas.getContext("2d", { willReadFrequently: true }); // Optimization hint
+        const scaleFactor = 12; // 300 DPI
         canvas.width = (cardW + bleed * 2) * scaleFactor;
         canvas.height = (cardH + bleed * 2) * scaleFactor;
 
         const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
-
-        // 1. Create a Set to track pages that have no actual cards on them
         const emptyPages = new Set();
+        let totalProcessed = 0; // Track progress
 
+        // Process batches
         for (let b = 0; b < totalBatches; b++) {
           if (b > 0) doc.addPage();
 
@@ -2352,6 +2358,11 @@ createApp({
           );
           let needsBackPage = this.globalDuplex && this.hasDFC;
 
+          // --- CHUNKING LOGIC START ---
+          // Every 10 cards, we pause for 0ms to let the UI update
+          // This prevents "Page Unresponsive" errors
+          // ----------------------------
+          
           // Draw Fronts
           for (let i = 0; i < batch.length; i++) {
             const card = batch[i];
@@ -2370,28 +2381,21 @@ createApp({
               cardH,
               canvas,
             );
-            this.drawCutGuides(
-              doc,
-              x,
-              y,
-              cardW,
-              cardH,
-              gap,
-              col,
-              row,
-              cols,
-              rows,
-            );
+            this.drawCutGuides(doc, x, y, cardW, cardH, gap, col, row, cols, rows);
+
+            // Update Progress Bar
+            totalProcessed++;
+            const pct = Math.round((totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) * 100);
+            this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
+            
+            // The "Breathe" Pause
+            if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
           }
 
           // Draw Backs (Duplex)
           if (needsBackPage) {
             doc.addPage();
-
-            // 2. Check if this specific batch has ANY back faces to print
             const hasBacksInBatch = batch.some((card) => card.backSrc);
-
-            // If no cards in this batch have a backSrc, mark this page as empty
             if (!hasBacksInBatch) {
               emptyPages.add(doc.internal.getNumberOfPages());
             }
@@ -2400,7 +2404,6 @@ createApp({
               const card = batch[i];
               const col = i % cols;
               const row = Math.floor(i / cols);
-              // Mirror column index for duplex alignment
               const mirroredCol = cols - 1 - col;
               const x = startX + mirroredCol * (cardW + gap);
               const y = startY + row * (cardH + gap);
@@ -2416,29 +2419,20 @@ createApp({
                   cardH,
                   canvas,
                 );
-                this.drawCutGuides(
-                  doc,
-                  x,
-                  y,
-                  cardW,
-                  cardH,
-                  gap,
-                  mirroredCol,
-                  row,
-                  cols,
-                  rows,
-                );
+                this.drawCutGuides(doc, x, y, cardW, cardH, gap, mirroredCol, row, cols, rows);
               }
+              
+              // Update Progress Bar for Backs too
+              // (We don't increment totalProcessed strictly here to keep math simple, but we pause)
+              if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
             }
           }
         }
 
-        // Footer
+        // Footer Text
         const pageCount = doc.internal.getNumberOfPages();
         for (let i = 1; i <= pageCount; i++) {
-          // 3. Skip writing text if this page was marked as empty
           if (emptyPages.has(i)) continue;
-
           doc.setPage(i);
           doc.setFontSize(8);
           doc.setTextColor(this.settings.pageBg === "black" ? 100 : 150);
@@ -2449,10 +2443,17 @@ createApp({
           );
         }
 
-        doc.save("proxies-custom.pdf");
+        this.statusMessage = "Finalizing PDF file...";
+        await new Promise(r => setTimeout(r, 10)); // One last breath
+        doc.save(`proxies-${printQueue.length}-cards.pdf`);
+        
+        this.statusMessage = "PDF Downloaded!";
+        setTimeout(() => (this.statusMessage = ""), 5000);
+
       } catch (e) {
         console.error(e);
-        this.errorMessage = "Failed to generate PDF. Check console.";
+        this.errorMessage = "Failed to generate PDF. Try fewer cards at once.";
+        this.statusMessage = "";
       } finally {
         this.isGenerating = false;
       }
