@@ -859,6 +859,7 @@ createApp({
         // This tells JS to keep them in their current relative positions.
         return 0;
       });
+      }
 
       this.showSortMenu = false;
       this.saveSession();
