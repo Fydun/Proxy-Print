@@ -523,7 +523,11 @@ createApp({
             this.langChangeCurrent++;
             continue;
           }
-          // Snapshot current language before overwriting
+          // Snapshot current language before overwriting (including local data URLs)
+          const currentLocalUrls = {};
+          [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
+            if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
+          });
           card.langCache[card.lang] = {
             src: card.src,
             smallSrc: card.smallSrc,
@@ -532,7 +536,9 @@ createApp({
             set: card.set,
             cn: card.cn,
             dfcData: card.dfcData ? { ...card.dfcData } : null,
+            localUrls: currentLocalUrls,
           };
+          // Restore cached data
           card.src = cached.src;
           card.smallSrc = cached.smallSrc;
           card.backSrc = cached.backSrc || null;
@@ -541,6 +547,10 @@ createApp({
           card.cn = cached.cn;
           card.dfcData = cached.dfcData || null;
           card.lang = targetLang;
+          // Re-inject cached local data URLs so resolveImage() returns them instantly
+          if (cached.localUrls) {
+            Object.assign(this.localImages, cached.localUrls);
+          }
           updatedCount++;
           this.langChangeCurrent++;
           continue;
@@ -596,7 +606,11 @@ createApp({
 
           // APPLY UPDATES
           if (newData) {
-            // Snapshot current language data before overwriting
+            // Snapshot current language data before overwriting (including local data URLs)
+            const currentLocalUrls = {};
+            [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
+              if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
+            });
             card.langCache[card.lang] = {
               src: card.src,
               smallSrc: card.smallSrc,
@@ -605,6 +619,7 @@ createApp({
               set: card.set,
               cn: card.cn,
               dfcData: card.dfcData ? { ...card.dfcData } : null,
+              localUrls: currentLocalUrls,
             };
 
             card.src = getImg(newData);
@@ -639,7 +654,7 @@ createApp({
             // Optional: Update artist/frame data if you use them for sorting
             if (newData.artist) card.artist = newData.artist;
 
-            // Also cache the newly fetched language
+            // Also cache the newly fetched language (localUrls populated later by loadLocalImages)
             card.langCache[targetLang] = {
               src: card.src,
               smallSrc: card.smallSrc,
@@ -648,6 +663,7 @@ createApp({
               set: card.set,
               cn: card.cn,
               dfcData: card.dfcData ? { ...card.dfcData } : null,
+              localUrls: {},
             };
 
             updatedCount++;
@@ -3376,6 +3392,16 @@ createApp({
             try {
               const dataUrl = await this.downloadThumbnail(url);
               this.localImages[url] = dataUrl;
+              // Backfill into active langCache entries so fast-path restore includes these
+              this.cards.forEach(card => {
+                if (!card.langCache) return;
+                const entry = card.langCache[card.lang];
+                if (entry && entry.localUrls) {
+                  if ([entry.src, entry.smallSrc, entry.backSrc, entry.smallBackSrc].includes(url)) {
+                    entry.localUrls[url] = dataUrl;
+                  }
+                }
+              });
             } catch (e) {
               console.warn("Thumb cache fail:", url, e.message);
             }
@@ -3389,16 +3415,47 @@ createApp({
     },
 
     async checkStorageUsage() {
-      if (navigator.storage && navigator.storage.estimate) {
-        const estimate = await navigator.storage.estimate();
-        const usage = estimate.usage || 0;
-        if (usage > 1024 * 1024 * 1024) {
-          this.storageUsage = (usage / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+      try {
+        const db = await this.initCacheDB();
+        const tx = db.transaction('images', 'readonly');
+        const store = tx.objectStore('images');
+        let totalBytes = 0;
+
+        await new Promise((resolve, reject) => {
+          const cursor = store.openCursor();
+          cursor.onsuccess = (e) => {
+            const c = e.target.result;
+            if (c) {
+              const val = c.value;
+              if (val instanceof Blob) {
+                totalBytes += val.size;
+              } else if (typeof val === 'string') {
+                totalBytes += val.length;
+              } else if (val instanceof ArrayBuffer) {
+                totalBytes += val.byteLength;
+              } else if (val && typeof val === 'object') {
+                // Rough estimate for other objects
+                totalBytes += JSON.stringify(val).length;
+              }
+              c.continue();
+            } else {
+              resolve();
+            }
+          };
+          cursor.onerror = (e) => reject(e);
+        });
+
+        if (totalBytes > 1024 * 1024 * 1024) {
+          this.storageUsage = (totalBytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        } else if (totalBytes > 1024 * 1024) {
+          this.storageUsage = (totalBytes / (1024 * 1024)).toFixed(1) + ' MB';
+        } else if (totalBytes > 1024) {
+          this.storageUsage = (totalBytes / 1024).toFixed(0) + ' KB';
         } else {
-          this.storageUsage = (usage / (1024 * 1024)).toFixed(2) + " MB";
+          this.storageUsage = totalBytes + ' B';
         }
-      } else {
-        this.storageUsage = "Unknown";
+      } catch {
+        this.storageUsage = 'Unknown';
       }
     },
     async clearStorage() {
