@@ -485,6 +485,7 @@ createApp({
       if (selectedCards.length === 0) return;
 
       let updatedCount = 0;
+      let failedCount = 0;
       const eligibleCards = selectedCards.filter(c => c.set !== "Local" && c.lang !== targetLang);
       this.langChangeTotal = eligibleCards.length;
       this.langChangeCurrent = 0;
@@ -591,9 +592,12 @@ createApp({
             if (newData.artist) card.artist = newData.artist;
 
             updatedCount++;
+          } else {
+            failedCount++;
           }
         } catch (e) {
           console.error(`Failed to translate ${card.name}`, e);
+          failedCount++;
         }
 
         this.langChangeCurrent++;
@@ -606,7 +610,12 @@ createApp({
       this.langChangeCurrent = 0;
       this.saveSession();
       this.loadLocalImages();
-      this.statusMessage = `Updated ${updatedCount} cards to ${targetLang.toUpperCase()}.`;
+
+      if (failedCount > 0) {
+        this.statusMessage = `Updated ${updatedCount} card(s) to ${targetLang.toUpperCase()}. ${failedCount} card(s) not available in that language.`;
+      } else {
+        this.statusMessage = `Updated ${updatedCount} card(s) to ${targetLang.toUpperCase()}.`;
+      }
 
       // Clear message after 3 seconds
       setTimeout(() => {
@@ -870,6 +879,9 @@ createApp({
           // Use new helper to categorize Cards (0) vs Extras (1)
           valA = this.getCardCategory(a);
           valB = this.getCardCategory(b);
+        } else if (key === "lang") {
+          valA = (a.lang || 'en').toLowerCase();
+          valB = (b.lang || 'en').toLowerCase();
         } else {
           return 0;
         }
