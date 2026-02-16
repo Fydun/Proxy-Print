@@ -74,19 +74,9 @@ export default {
               <p class="font-semibold mb-1">Privacy & Data Storage</p>
               <p class="mb-3">This application runs entirely in your browser. Your deck lists and custom images are stored on your device using IndexedDB. User settings are saved via LocalStorage. No data is transmitted to, processed by, or stored on any external server.</p>
               
-              <div class="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-600">
-                <div class="flex flex-col">
-                   <span class="font-bold text-gray-700 dark:text-gray-300">Storage Used</span>
-                   <span>{{ storageUsage || 'Calculated on open...' }}</span>
-                </div>
-                <button 
-                  @click="$emit('clear-storage')" 
-                  class="px-3 py-1.5 bg-white dark:bg-gray-600 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded font-bold transition-colors text-xs flex items-center gap-1"
-                >
-                  <app-icon name="trash" class="h-3 w-3"></app-icon>
-                  Clear Cache
-                </button>
-              </div>
+              <p class="pt-3 border-t border-gray-200 dark:border-gray-600 italic">
+                  Note: High-quality images for printing are cached automatically by your browser and will be cleared automatically if disk space is needed.
+              </p>
             </div>
           </div>
 

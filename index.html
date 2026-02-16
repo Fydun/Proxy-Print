@@ -137,14 +137,15 @@
           >
             <button
               @click="openDeckEditor"
-              class="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 font-semibold rounded-lg transition-colors border border-indigo-100"
+              :disabled="isGenerating"
+              class="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 font-semibold rounded-lg transition-colors border border-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <app-icon name="edit-deck" class="h-5 w-5"></app-icon>
               Edit Deck
             </button>
             <button
               @click="fetchAllTokens"
-              :disabled="isFetchingTokens"
+              :disabled="isFetchingTokens || isGenerating"
               class="flex items-center gap-2 px-4 py-2 bg-secondary text-primary dark:text-gray-200 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-line disabled:opacity-50"
               title="Add all tokens and helper cards"
             >
@@ -160,7 +161,8 @@
             <div class="relative z-30">
               <button
                 @click="showSortMenu = !showSortMenu"
-                class="flex items-center gap-2 px-4 py-2 bg-secondary text-primary dark:text-gray-200 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-line"
+                :disabled="isGenerating"
+                class="flex items-center gap-2 px-4 py-2 bg-secondary text-primary dark:text-gray-200 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-line disabled:opacity-50"
                 title="Sorting options"
               >
                 <!-- Arrow flips vertically to indicate direction -->
@@ -229,7 +231,7 @@
             <!-- Duplex Toggle -->
             <label
               class="cursor-pointer flex items-center gap-2 bg-surface border border-line px-3 py-2 rounded-lg hover:border-line transition-colors select-none"
-              :class="{'opacity-50': !hasDFC}"
+              :class="{'opacity-50': !hasDFC || isGenerating, 'pointer-events-none': isGenerating}"
               title="Enable for double-sided printing"
             >
               <span class="text-sm font-medium text-muted">Duplex</span>
@@ -245,14 +247,15 @@
               <input
                 type="checkbox"
                 v-model="globalDuplex"
-                :disabled="!hasDFC"
+                :disabled="!hasDFC || isGenerating"
                 class="hidden"
               />
             </label>
 
             <button
               @click="showSettingsModal = true"
-              class="p-2.5 text-muted hover:text-primary dark:text-gray-200 hover:bg-gray-100 rounded-lg transition-colors border border-transparent hover:border-line"
+              :disabled="isGenerating"
+              class="p-2.5 text-muted hover:text-primary dark:text-gray-200 hover:bg-gray-100 rounded-lg transition-colors border border-transparent hover:border-line disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
               title="Print Settings"
             >
               <app-icon name="settings" class="h-6 w-6"></app-icon>
@@ -263,7 +266,7 @@
             <!-- Generate & Preview Buttons -->
             <button
               @click="openPreview"
-              :disabled="cards.length === 0"
+              :disabled="cards.length === 0 || isGenerating"
               class="flex items-center gap-2 px-5 py-2.5 bg-surface text-purple-700 border border-purple-200 hover:bg-purple-50 hover:border-purple-300 font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <app-icon name="preview" class="h-5 w-5"></app-icon>
@@ -440,9 +443,11 @@
                   @click="previewImage = (card.showBack && card.backSrc) ? card.backSrc : card.src"
                 >
                   <img
-                    :src="(card.showBack && card.backSrc) ? card.backSrc : card.src"
+                    :src="(card.showBack && card.backSrc) ? (card.smallBackSrc || card.backSrc) : (card.smallSrc || card.src)"
                     class="w-full h-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
                     loading="lazy"
+                    crossorigin="anonymous"
+                    @error="handleImageError($event, card)"
                   />
                   <div class="absolute top-2 left-2 z-20" @click.stop>
                     <input
@@ -802,6 +807,8 @@
             :src="previewImage"
             class="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl cursor-default"
             @click.stop
+            crossorigin="anonymous"
+            @error="handleImageError($event, 'preview')"
           />
         </div>
       </Transition>
@@ -860,6 +867,24 @@
 
       <!-- Hidden Canvas for Processing -->
       <canvas ref="procCanvas" class="hidden"></canvas>
+
+      <!-- Prefetch Status Indicator -->
+      <div
+        v-if="prefetchTotal > 0 && prefetchCurrent < prefetchTotal"
+        class="fixed bottom-4 right-4 bg-surface border border-line p-3 rounded-lg shadow-xl flex items-center gap-3 z-50 animate-bounce-in"
+      >
+        <div
+          class="h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"
+        ></div>
+        <div class="flex flex-col">
+          <span class="text-xs font-bold text-primary"
+            >Caching High-Res Images</span
+          >
+          <span class="text-[10px] text-muted"
+            >{{ prefetchCurrent }} / {{ prefetchTotal }} (for PDF)</span
+          >
+        </div>
+      </div>
     </div>
 
     <!-- ================================================================== -->
@@ -867,5 +892,7 @@
     <!-- ================================================================== -->
 
     <script type="module" src="app.js"></script>
+
+    <!-- Prefetch Status Indicator -->
   </body>
 </html>

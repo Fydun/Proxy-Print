@@ -227,7 +227,6 @@ createApp({
     cards: {
       handler(newCards) {
         this.saveSession();
-        this.runPrefetch();
       },
       deep: true,
     },
@@ -357,6 +356,9 @@ createApp({
           if (parsed.preferredVersions) {
             this.preferredVersions = parsed.preferredVersions;
           }
+
+          // Start background caching for restored cards
+          this.runPrefetch();
         }
       } catch (e) {
         console.error("Load error", e);
@@ -1409,7 +1411,9 @@ createApp({
                   }
 
                   let src = "",
-                    backSrc = null;
+                    backSrc = null,
+                    smallSrc = "",
+                    smallBackSrc = null;
 
                   // Image logic
                   if (
@@ -1419,12 +1423,24 @@ createApp({
                     src =
                       scryCard.card_faces[0].image_uris.png ||
                       scryCard.card_faces[0].image_uris.large;
+                    smallSrc =
+                      scryCard.card_faces[0].image_uris.small ||
+                      scryCard.card_faces[0].image_uris.normal ||
+                      src;
                     backSrc =
                       scryCard.card_faces[1].image_uris?.png ||
                       scryCard.card_faces[1].image_uris?.large;
+                    smallBackSrc =
+                      scryCard.card_faces[1].image_uris?.small ||
+                      scryCard.card_faces[1].image_uris?.normal ||
+                      backSrc;
                   } else {
                     src =
                       scryCard.image_uris?.png || scryCard.image_uris?.large;
+                    smallSrc =
+                      scryCard.image_uris?.small ||
+                      scryCard.image_uris?.normal ||
+                      src;
                   }
 
                   if (src) {
@@ -1434,7 +1450,9 @@ createApp({
                       setName: scryCard.set_name,
                       cn: scryCard.collector_number,
                       src,
+                      smallSrc,
                       backSrc,
+                      smallBackSrc,
                       showBack: false,
                       qty: target.qty,
                       dfcData: null,
@@ -1508,6 +1526,9 @@ createApp({
 
       this.cards = nextCards;
       this.isImporting = false;
+
+      // Start background caching of high-res images
+      this.runPrefetch();
 
       if (this.importErrors.length > 0) {
         this.importStatus = `Complete. ${this.importErrors.length} cards could not be found.`;
@@ -1796,18 +1817,30 @@ createApp({
             if (exists) return;
 
             let src = "",
-              backSrc = null;
+              backSrc = null,
+              smallSrc = "",
+              smallBackSrc = null;
 
             // Handle double-faced tokens (e.g. Incubator // Phyrexian)
             if (token.card_faces && token.card_faces[0].image_uris) {
               src =
                 token.card_faces[0].image_uris.png ||
                 token.card_faces[0].image_uris.large;
+              smallSrc =
+                token.card_faces[0].image_uris.small ||
+                token.card_faces[0].image_uris.normal ||
+                src;
               backSrc =
                 token.card_faces[1].image_uris?.png ||
                 token.card_faces[1].image_uris?.large;
+              smallBackSrc =
+                token.card_faces[1].image_uris?.small ||
+                token.card_faces[1].image_uris?.normal ||
+                backSrc;
             } else {
               src = token.image_uris?.png || token.image_uris?.large;
+              smallSrc =
+                token.image_uris?.small || token.image_uris?.normal || src;
             }
 
             if (src) {
@@ -1816,7 +1849,9 @@ createApp({
                 set: token.set.toUpperCase(),
                 cn: token.collector_number,
                 src,
+                smallSrc,
                 backSrc,
+                smallBackSrc,
                 showBack: false,
                 qty: 1,
                 dfcData: null,
@@ -2165,6 +2200,43 @@ createApp({
 
     /* --- PDF Generation & Preview --- */
 
+    handleImageError(e, item) {
+      const img = e.target;
+      const srcToCheck = img.getAttribute("src"); // Get raw src
+
+      // Stop if we already fixed this URL to prevent loops
+      if (srcToCheck && srcToCheck.includes("fix=cors")) return;
+
+      console.warn("Fixing image source (CORS/Cache):", srcToCheck);
+
+      const fixUrl = (url) => {
+        if (!url) return url;
+        // Clean any existing timestamps
+        let clean = url.split("?")[0];
+        // Append static fix that allows browser caching
+        return clean + "?fix=cors";
+      };
+
+      // 1. If we passed a Card object, update it persistently
+      if (item && typeof item === "object") {
+        if (item.src && srcToCheck.includes(item.src)) {
+          item.src = fixUrl(item.src);
+        } else if (item.backSrc && srcToCheck.includes(item.backSrc)) {
+          item.backSrc = fixUrl(item.backSrc);
+        }
+        // Force save so the fix remembers next reload
+        this.saveSession();
+      }
+      // 2. If it's the Preview string
+      else if (item === "preview") {
+        this.previewImage = fixUrl(this.previewImage);
+      }
+      // 3. Fallback for direct DOM (though Vue update above should handle it)
+      else {
+        img.src = fixUrl(srcToCheck);
+      }
+    },
+
     loadImage(src) {
       // 1. Check Promise Cache (Deduplication within this print session)
       if (!this._imgPromiseCache) this._imgPromiseCache = new Map();
@@ -2434,9 +2506,20 @@ createApp({
     },
 
     async runPrefetch() {
+      // 1. Invalidate previous runs
+      this.prefetchRunId++;
+      const currentRunId = this.prefetchRunId;
+
+      // 2. Clear state immediately
+      if (this.cards.length === 0) {
+        this.prefetchTotal = 0;
+        this.prefetchCurrent = 0;
+        return;
+      }
+
       if (this.isGenerating) return;
 
-      // Deduplicate sources
+      // Deduplicate sources (Target High-Res SRC)
       const queue = new Set();
       this.cards.forEach((c) => {
         if (c.src) queue.add(c.src);
@@ -2444,13 +2527,49 @@ createApp({
       });
 
       const tasks = Array.from(queue);
+      this.prefetchTotal = tasks.length;
+      this.prefetchCurrent = 0;
+
       const BATCH_SIZE = 4; // Process N images at a time to be faster
 
       const processBatch = async () => {
-        if (this.isGenerating || tasks.length === 0) return;
+        // Stop if a new run has started
+        if (this.prefetchRunId !== currentRunId) return;
+
+        if (this.isGenerating || tasks.length === 0) {
+          if (tasks.length === 0) {
+            // Done
+            setTimeout(() => {
+              // Only reset if we are still the active run
+              if (this.prefetchRunId === currentRunId) {
+                this.prefetchTotal = 0;
+                this.prefetchCurrent = 0;
+              }
+            }, 2000);
+          }
+          return;
+        }
 
         const batch = tasks.splice(0, BATCH_SIZE);
-        await Promise.all(batch.map((src) => this.processCardToCache(src)));
+        await Promise.all(
+          batch.map(async (src) => {
+            // Check again inside loop
+            if (this.prefetchRunId !== currentRunId) return;
+            try {
+              // Race against a 30s timeout to prevent hanging
+              await Promise.race([
+                this.processCardToCache(src),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("Timeout")), 30000),
+                ),
+              ]);
+            } catch (e) {
+              console.warn("Prefetch skip:", src, e.message);
+            } finally {
+              this.prefetchCurrent++;
+            }
+          }),
+        );
 
         // Breathe
         setTimeout(processBatch, 20);
@@ -2466,6 +2585,10 @@ createApp({
       this.errorMessage = "";
       this.statusMessage = "Initializing PDF generation..."; // Notify user start
 
+      // SNAPSHOT SETTINGS for stability during async generation
+      const currentSettings = JSON.parse(JSON.stringify(this.settings));
+      const useDuplex = this.globalDuplex && this.hasDFC;
+
       // Allow UI to update before heavy lifting starts
       await new Promise((r) => setTimeout(r, 50));
 
@@ -2473,18 +2596,18 @@ createApp({
         const doc = new jsPDF({
           orientation: "portrait",
           unit: "mm",
-          format: this.settings.paperSize,
+          format: currentSettings.paperSize,
         });
 
-        const pageSize = PAPER_SIZES[this.settings.paperSize];
+        const pageSize = PAPER_SIZES[currentSettings.paperSize];
         const pageWidth = pageSize.w;
         const pageHeight = pageSize.h;
 
-        const scale = Number(this.settings.cardScale) / 100;
-        const cardW = Number(this.settings.cardWidth) * scale;
-        const cardH = Number(this.settings.cardHeight) * scale;
-        const gap = Number(this.settings.gapSize);
-        const bleed = Number(this.settings.bleedMm);
+        const scale = Number(currentSettings.cardScale) / 100;
+        const cardW = Number(currentSettings.cardWidth) * scale;
+        const cardH = Number(currentSettings.cardHeight) * scale;
+        const gap = Number(currentSettings.gapSize);
+        const bleed = Number(currentSettings.bleedMm);
 
         let cols = Math.floor((pageWidth - 10) / (cardW + gap));
         let rows = Math.floor((pageHeight - 10) / (cardH + gap));
@@ -2517,6 +2640,7 @@ createApp({
         const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
         const emptyPages = new Set();
         let totalProcessed = 0; // Track progress
+        const failedCards = []; // Track specific failures
 
         // Process batches
         for (let b = 0; b < totalBatches; b++) {
@@ -2526,43 +2650,71 @@ createApp({
             b * itemsPerPage,
             (b + 1) * itemsPerPage,
           );
-          let needsBackPage = this.globalDuplex && this.hasDFC;
+          let needsBackPage = useDuplex;
 
           // --- CHUNKING LOGIC START ---
-          // Every 10 cards, we pause for 0ms to let the UI update
-          // This prevents "Page Unresponsive" errors
+          // Every 5 cards, we pause to let the UI update and GC run
+          // 20 was too aggressive for large decks (500+)
           // ----------------------------
+          if (b % 1 === 0) await new Promise((r) => setTimeout(r, 0));
 
           // Draw Fronts
           for (let i = 0; i < batch.length; i++) {
             const card = batch[i];
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            const x = startX + col * (cardW + gap);
-            const y = startY + row * (cardH + gap);
 
-            await this.drawCardToPDF(
-              doc,
-              ctx,
-              card.src,
-              x,
-              y,
-              cardW,
-              cardH,
-              canvas,
-            );
-            this.drawCutGuides(
-              doc,
-              x,
-              y,
-              cardW,
-              cardH,
-              gap,
-              col,
-              row,
-              cols,
-              rows,
-            );
+            try {
+              const col = i % cols;
+              const row = Math.floor(i / cols);
+              const x = startX + col * (cardW + gap);
+              const y = startY + row * (cardH + gap);
+
+              await this.drawCardToPDF(
+                doc,
+                ctx,
+                card.src,
+                x,
+                y,
+                cardW,
+                cardH,
+                canvas,
+                currentSettings,
+              );
+              this.drawCutGuides(
+                doc,
+                x,
+                y,
+                cardW,
+                cardH,
+                gap,
+                col,
+                row,
+                cols,
+                rows,
+                currentSettings,
+              );
+            } catch (cardErr) {
+              console.error("Failed to draw card:", card.name, cardErr);
+              failedCards.push(card.name);
+
+              // Draw a fallback "ERROR" box so the user sees it on the PDF
+              try {
+                doc.setDrawColor(255, 0, 0);
+                doc.setLineWidth(0.5);
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = startX + col * (cardW + gap);
+                const y = startY + row * (cardH + gap);
+                doc.rect(x, y, cardW, cardH);
+                doc.setFontSize(10);
+                doc.setTextColor(255, 0, 0);
+                doc.text("RENDER FAIL", x + 5, y + 10);
+                doc.text(card.name.substring(0, 15), x + 5, y + 15);
+              } catch (drawErr) {
+                console.error("Could not even draw error box", drawErr);
+              }
+            }
+
+            // Update Progress Bar
 
             // Update Progress Bar
             totalProcessed++;
@@ -2572,12 +2724,9 @@ createApp({
             );
             this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
 
-            // OPTIMIZED BREATHE:
-            // Only pause frequently if we are actually doing heavy CPU work (missed cache).
-            // If we hit cache, we can go much faster.
-            // Note: We can't easily know if drawCardToPDF hit cache since it returns void,
-            // but prefetch should have covered most. We'll default to a faster loop.
-            if (i % 20 === 0) await new Promise((r) => setTimeout(r, 0));
+            // OPTIMIZED BREATHE REVERTED:
+            // Back to 5. Large decks need more breathing room for the main thread/GC.
+            if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
           }
 
           // Draw Backs (Duplex)
@@ -2590,39 +2739,49 @@ createApp({
 
             for (let i = 0; i < batch.length; i++) {
               const card = batch[i];
-              const col = i % cols;
-              const row = Math.floor(i / cols);
-              const mirroredCol = cols - 1 - col;
-              const x = startX + mirroredCol * (cardW + gap);
-              const y = startY + row * (cardH + gap);
+              try {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const mirroredCol = cols - 1 - col;
+                const x = startX + mirroredCol * (cardW + gap);
+                const y = startY + row * (cardH + gap);
 
-              if (card.backSrc) {
-                await this.drawCardToPDF(
-                  doc,
-                  ctx,
-                  card.backSrc,
-                  x,
-                  y,
-                  cardW,
-                  cardH,
-                  canvas,
-                );
-                this.drawCutGuides(
-                  doc,
-                  x,
-                  y,
-                  cardW,
-                  cardH,
-                  gap,
-                  mirroredCol,
-                  row,
-                  cols,
-                  rows,
+                if (card.backSrc) {
+                  await this.drawCardToPDF(
+                    doc,
+                    ctx,
+                    card.backSrc,
+                    x,
+                    y,
+                    cardW,
+                    cardH,
+                    canvas,
+                    currentSettings,
+                  );
+                  this.drawCutGuides(
+                    doc,
+                    x,
+                    y,
+                    cardW,
+                    cardH,
+                    gap,
+                    mirroredCol,
+                    row,
+                    cols,
+                    rows,
+                    currentSettings,
+                  );
+                }
+              } catch (backErr) {
+                console.error(
+                  "Failed to draw back for card:",
+                  card.name,
+                  backErr,
                 );
               }
 
               // Update Progress Bar for Backs too
-              if (i % 20 === 0) await new Promise((r) => setTimeout(r, 0));
+              if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
             }
           }
         }
@@ -2633,7 +2792,7 @@ createApp({
           if (emptyPages.has(i)) continue;
           doc.setPage(i);
           doc.setFontSize(8);
-          doc.setTextColor(this.settings.pageBg === "black" ? 100 : 150);
+          doc.setTextColor(currentSettings.pageBg === "black" ? 100 : 150);
           doc.text(
             "Images via Scryfall. Proxy tool for personal playtesting only.",
             10,
@@ -2645,29 +2804,46 @@ createApp({
         await new Promise((r) => setTimeout(r, 10)); // One last breath
         doc.save(`proxies-${printQueue.length}-cards.pdf`);
 
-        this.statusMessage = "PDF Downloaded!";
-        setTimeout(() => (this.statusMessage = ""), 5000);
+        if (failedCards.length > 0) {
+          this.errorMessage = `Generated with ${failedCards.length} errors: ${failedCards.slice(0, 3).join(", ")}${failedCards.length > 3 ? "..." : ""}`;
+          this.statusMessage = "";
+        } else {
+          this.statusMessage = "PDF Downloaded Successfully!";
+          setTimeout(() => (this.statusMessage = ""), 5000);
+        }
       } catch (e) {
         console.error(e);
-        this.errorMessage = "Failed to generate PDF. Try fewer cards at once.";
+        this.errorMessage = `Failed to generate PDF. Error: ${e.message || e}`;
         this.statusMessage = "";
       } finally {
         this.isGenerating = false;
       }
     },
 
-    drawCutGuides(doc, x, y, w, h, gap, col, row, maxCols, maxRows) {
-      if (this.settings.cutMarks === "none") return;
+    drawCutGuides(
+      doc,
+      x,
+      y,
+      w,
+      h,
+      gap,
+      col,
+      row,
+      maxCols,
+      maxRows,
+      settings = this.settings,
+    ) {
+      if (settings.cutMarks === "none") return;
 
-      const isDark = this.settings.pageBg === "black";
+      const isDark = settings.pageBg === "black";
       const color = isDark ? 255 : 150;
       doc.setDrawColor(color);
       doc.setLineWidth(0.1);
 
-      if (this.settings.cutMarks === "dotted") doc.setLineDash([1, 1], 0);
+      if (settings.cutMarks === "dotted") doc.setLineDash([1, 1], 0);
       else doc.setLineDash([], 0);
 
-      if (this.settings.cutMarks === "crosshairs") {
+      if (settings.cutMarks === "crosshairs") {
         const len = 3;
         // Draw L-shapes at corners
         doc.line(x - gap / 2, y, x - gap / 2 - len, y);
@@ -2684,12 +2860,22 @@ createApp({
       }
     },
 
-    async drawCardToPDF(doc, ctx, src, x, y, w, h, canvas) {
+    async drawCardToPDF(
+      doc,
+      ctx,
+      src,
+      x,
+      y,
+      w,
+      h,
+      canvas,
+      settings = this.settings,
+    ) {
       try {
-        const bleed = this.settings.bleedMm || 0;
+        const bleed = settings.bleedMm || 0;
 
         // Create a unique key based on visual settings
-        const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+        const cacheKey = `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}`;
 
         // Check IDB Cache
         let croppedData = await this.getFromCache(cacheKey);
@@ -2703,7 +2889,7 @@ createApp({
 
           // Clear and Fill
           ctx.clearRect(0, 0, canvasW, canvasH);
-          ctx.fillStyle = this.settings.pageBg;
+          ctx.fillStyle = settings.pageBg;
           ctx.fillRect(0, 0, canvasW, canvasH);
 
           // Calculate scaling
