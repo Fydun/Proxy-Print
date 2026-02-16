@@ -226,6 +226,7 @@ createApp({
     cards: {
       handler(newCards) {
         this.saveSession();
+        this.runPrefetch();
       },
       deep: true,
     },
@@ -234,6 +235,13 @@ createApp({
     },
     settings: {
       handler(newVal) {
+        // Clear cache on visual settings change to force re-render
+        if (this._processedImgCache) {
+          this._processedImgCache.clear();
+        }
+        // Also clear persistent DB
+        this.clearCacheDB();
+
         // Auto-set dimensions based on presets
         if (newVal.cardPreset === "standard") {
           newVal.cardWidth = 63;
@@ -259,6 +267,8 @@ createApp({
           localStorage.setItem("darkMode", "false");
         }
         this.saveSession();
+        // Trigger prefetch with new settings
+        this.runPrefetch();
       },
       deep: true,
     },
@@ -266,6 +276,9 @@ createApp({
   async mounted() {
     //Wait for saved settings to load from IndexedDB
     await this.loadSession();
+
+    // Kick off prefetch on load
+    this.runPrefetch();
 
     //Attach Event Listeners
     window.addEventListener("keydown", this.handleKeydown);
@@ -2289,15 +2302,168 @@ createApp({
       }
     },
 
-async generatePDF() {
+    /* --- Optimization: Pre-fetching (IndexedDB) --- */
+
+    // --- IndexedDB Cache Helpers ---
+    async initCacheDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open("MTGProxyImageCache", 1);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains("images")) {
+            db.createObjectStore("images");
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e);
+      });
+    },
+
+    async saveToCache(key, data) {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readwrite");
+        const store = tx.objectStore("images");
+        store.put(data, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    },
+
+    async getFromCache(key) {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readonly");
+        const store = tx.objectStore("images");
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e);
+      });
+    },
+
+    async clearCacheDB() {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readwrite");
+        const store = tx.objectStore("images");
+        store.clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    },
+
+    getPrefetchCanvas() {
+      if (!this._prefetchCanvas) {
+        this._prefetchCanvas = document.createElement("canvas");
+      }
+      return this._prefetchCanvas;
+    },
+
+    async processCardToCache(src) {
+      if (!src) return;
+
+      const scale = Number(this.settings.cardScale) / 100;
+      const cardW = Number(this.settings.cardWidth) * scale;
+      const cardH = Number(this.settings.cardHeight) * scale;
+      const bleed = this.settings.bleedMm || 0;
+
+      const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+
+      // Check IDB first
+      const cached = await this.getFromCache(cacheKey);
+      if (cached) return;
+
+      try {
+        const imgObj = await this.loadImage(src);
+        const canvas = this.getPrefetchCanvas();
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+        const scaleFactor = 12; // 300 DPI
+        const targetW = (cardW + bleed * 2) * scaleFactor;
+        const targetH = (cardH + bleed * 2) * scaleFactor;
+
+        // Resize only if necessary (expensive op)
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+
+        const canvasW = canvas.width;
+        const canvasH = canvas.height;
+
+        ctx.clearRect(0, 0, canvasW, canvasH);
+        ctx.fillStyle = this.settings.pageBg;
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        const targetRatio = cardW / cardH;
+        const imgRatio = imgObj.width / imgObj.height;
+
+        let sWidth, sHeight, sx, sy;
+
+        if (imgRatio > targetRatio) {
+          sHeight = imgObj.height;
+          sWidth = sHeight * targetRatio;
+          sy = 0;
+          sx = (imgObj.width - sWidth) / 2;
+        } else {
+          sWidth = imgObj.width;
+          sHeight = sWidth / targetRatio;
+          sx = 0;
+          sy = (imgObj.height - sHeight) / 2;
+        }
+
+        ctx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, canvasW, canvasH);
+
+        if (this.settings.proxyMarker) {
+          ctx.font = `bold ${canvasH * 0.025}px Arial`;
+          ctx.fillStyle = "rgba(255,255,255,0.8)";
+          ctx.textAlign = "center";
+          ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
+        }
+
+        // Compress to JPEG (0.85 is a good balance for disk storage vs quality)
+        const croppedData = canvas.toDataURL("image/jpeg", 0.85);
+        await this.saveToCache(cacheKey, croppedData);
+      } catch (e) {
+        console.warn("Prefetch failed for", src, e);
+      }
+    },
+
+    async runPrefetch() {
+      if (this.isGenerating) return;
+
+      // Deduplicate sources
+      const queue = new Set();
+      this.cards.forEach((c) => {
+        if (c.src) queue.add(c.src);
+        if (c.backSrc) queue.add(c.backSrc);
+      });
+
+      const tasks = Array.from(queue);
+      const BATCH_SIZE = 4; // Process N images at a time to be faster
+
+      const processBatch = async () => {
+        if (this.isGenerating || tasks.length === 0) return;
+
+        const batch = tasks.splice(0, BATCH_SIZE);
+        await Promise.all(batch.map((src) => this.processCardToCache(src)));
+
+        // Breathe
+        setTimeout(processBatch, 20);
+      };
+
+      processBatch();
+    },
+
+    async generatePDF() {
       if (this.cards.length === 0) return;
-      
+
       this.isGenerating = true;
       this.errorMessage = "";
       this.statusMessage = "Initializing PDF generation..."; // Notify user start
-      
+
       // Allow UI to update before heavy lifting starts
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
 
       try {
         const doc = new jsPDF({
@@ -2362,7 +2528,7 @@ async generatePDF() {
           // Every 10 cards, we pause for 0ms to let the UI update
           // This prevents "Page Unresponsive" errors
           // ----------------------------
-          
+
           // Draw Fronts
           for (let i = 0; i < batch.length; i++) {
             const card = batch[i];
@@ -2381,15 +2547,33 @@ async generatePDF() {
               cardH,
               canvas,
             );
-            this.drawCutGuides(doc, x, y, cardW, cardH, gap, col, row, cols, rows);
+            this.drawCutGuides(
+              doc,
+              x,
+              y,
+              cardW,
+              cardH,
+              gap,
+              col,
+              row,
+              cols,
+              rows,
+            );
 
             // Update Progress Bar
             totalProcessed++;
-            const pct = Math.round((totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) * 100);
+            const pct = Math.round(
+              (totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) *
+                100,
+            );
             this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
-            
-            // The "Breathe" Pause
-            if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+
+            // OPTIMIZED BREATHE:
+            // Only pause frequently if we are actually doing heavy CPU work (missed cache).
+            // If we hit cache, we can go much faster.
+            // Note: We can't easily know if drawCardToPDF hit cache since it returns void,
+            // but prefetch should have covered most. We'll default to a faster loop.
+            if (i % 20 === 0) await new Promise((r) => setTimeout(r, 0));
           }
 
           // Draw Backs (Duplex)
@@ -2419,12 +2603,22 @@ async generatePDF() {
                   cardH,
                   canvas,
                 );
-                this.drawCutGuides(doc, x, y, cardW, cardH, gap, mirroredCol, row, cols, rows);
+                this.drawCutGuides(
+                  doc,
+                  x,
+                  y,
+                  cardW,
+                  cardH,
+                  gap,
+                  mirroredCol,
+                  row,
+                  cols,
+                  rows,
+                );
               }
-              
+
               // Update Progress Bar for Backs too
-              // (We don't increment totalProcessed strictly here to keep math simple, but we pause)
-              if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+              if (i % 20 === 0) await new Promise((r) => setTimeout(r, 0));
             }
           }
         }
@@ -2444,12 +2638,11 @@ async generatePDF() {
         }
 
         this.statusMessage = "Finalizing PDF file...";
-        await new Promise(r => setTimeout(r, 10)); // One last breath
+        await new Promise((r) => setTimeout(r, 10)); // One last breath
         doc.save(`proxies-${printQueue.length}-cards.pdf`);
-        
+
         this.statusMessage = "PDF Downloaded!";
         setTimeout(() => (this.statusMessage = ""), 5000);
-
       } catch (e) {
         console.error(e);
         this.errorMessage = "Failed to generate PDF. Try fewer cards at once.";
@@ -2491,16 +2684,13 @@ async generatePDF() {
       try {
         const bleed = this.settings.bleedMm || 0;
 
-        // Initialize processed data cache
-        if (!this._processedImgCache) this._processedImgCache = new Map();
-
         // Create a unique key based on visual settings
         const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
 
-        // Check if we have already processed this exact card image
-        let croppedData = this._processedImgCache.get(cacheKey);
+        // Check IDB Cache
+        let croppedData = await this.getFromCache(cacheKey);
 
-        // If not in cache, draw and process it
+        // If not in cache, draw and process it (Fallback for whatever reason)
         if (!croppedData) {
           const imgObj = await this.loadImage(src);
 
@@ -2548,11 +2738,11 @@ async generatePDF() {
             ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
           }
 
-          // Compress to JPEG (0.9 is faster and sufficient for print)
-          croppedData = canvas.toDataURL("image/jpeg", 0.9);
+          // Compress to JPEG (0.85 matches prefetch)
+          croppedData = canvas.toDataURL("image/jpeg", 0.85);
 
           // Save to cache
-          this._processedImgCache.set(cacheKey, croppedData);
+          await this.saveToCache(cacheKey, croppedData);
         }
 
         // Add the (potentially cached) image data to PDF
