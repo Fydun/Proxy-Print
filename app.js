@@ -519,7 +519,11 @@ createApp({
               `https://api.scryfall.com/cards/${card.set}/${card.cn}/${targetLang}`,
             );
             if (exactRes.ok) {
-              newData = await exactRes.json();
+              const exactData = await exactRes.json();
+              // Skip placeholders — Scryfall has no real scan
+              if (exactData.image_status !== 'placeholder') {
+                newData = exactData;
+              }
             }
           }
 
@@ -542,9 +546,9 @@ createApp({
             );
             if (searchRes.ok) {
               const searchData = await searchRes.json();
-              // Take the first match (most recent printing usually due to order=released)
+              // Take the first non-placeholder match
               if (searchData.data && searchData.data.length > 0) {
-                newData = searchData.data[0];
+                newData = searchData.data.find(c => c.image_status !== 'placeholder') || null;
               }
             }
           }
@@ -1485,7 +1489,13 @@ createApp({
                       const langRes = await fetch(
                         `https://api.scryfall.com/cards/${scryCard.set}/${scryCard.collector_number}/${target.lang}`,
                       );
-                      if (langRes.ok) scryCard = await langRes.json();
+                      if (langRes.ok) {
+                        const langData = await langRes.json();
+                        // Only use if Scryfall has a real scan, not a placeholder
+                        if (langData.image_status !== 'placeholder') {
+                          scryCard = langData;
+                        }
+                      }
                     } catch (e) {
                       /* ignore */
                     }
@@ -2053,7 +2063,7 @@ createApp({
           const res = await fetch(url);
           const data = await res.json();
           if (data.data) {
-            const scryfallVersions = data.data.map((c) => {
+            const scryfallVersions = data.data.filter((c) => c.image_status !== 'placeholder').map((c) => {
               let previewSrc = "",
                 fullSrc = "",
                 backSrc = null,
