@@ -298,6 +298,9 @@ createApp({
     //Wait for saved settings to load from IndexedDB
     await this.loadSession();
 
+    // Initialize parallel image processing workers
+    this.initWorkerPool();
+
     // Kick off prefetch on load
     this.runPrefetch();
 
@@ -310,6 +313,7 @@ createApp({
     window.addEventListener("paste", this.handlePaste);
   },
   unmounted() {
+    this.destroyWorkerPool();
     window.removeEventListener("keydown", this.handleKeydown);
     window.removeEventListener("dragenter", this.onDragEnter);
     window.removeEventListener("dragover", this.onDragOver);
@@ -2532,6 +2536,99 @@ createApp({
       });
     },
 
+    /* --- Worker Pool for Parallel Image Processing --- */
+
+    initWorkerPool() {
+      // Feature detection: OffscreenCanvas + createImageBitmap required
+      if (
+        typeof OffscreenCanvas === "undefined" ||
+        typeof createImageBitmap === "undefined"
+      ) {
+        console.info(
+          "OffscreenCanvas not supported — using single-thread fallback.",
+        );
+        this._useWorkers = false;
+        return;
+      }
+
+      try {
+        const poolSize = Math.min(navigator.hardwareConcurrency || 4, 8);
+        this._workerPool = [];
+        this._workerTaskId = 0;
+        this._workerCallbacks = new Map();
+
+        for (let i = 0; i < poolSize; i++) {
+          const worker = new Worker("./imageWorker.js");
+
+          worker.onmessage = (e) => {
+            const { taskId } = e.data;
+            const cb = this._workerCallbacks.get(taskId);
+            if (cb) {
+              this._workerCallbacks.delete(taskId);
+              if (e.data.status === "error") {
+                cb.reject(new Error(e.data.error));
+              } else {
+                cb.resolve(e.data);
+              }
+            }
+          };
+
+          worker.onerror = (err) => {
+            console.warn("Worker error:", err);
+          };
+
+          this._workerPool.push(worker);
+        }
+
+        this._useWorkers = true;
+        this._workerRR = 0;
+        console.info(`Image worker pool initialized: ${poolSize} workers`);
+      } catch (err) {
+        console.warn("Failed to init worker pool, using fallback:", err);
+        this._useWorkers = false;
+      }
+    },
+
+    destroyWorkerPool() {
+      if (this._workerPool) {
+        this._workerPool.forEach((w) => w.terminate());
+        this._workerPool = null;
+      }
+      if (this._workerCallbacks) {
+        this._workerCallbacks.forEach((cb) =>
+          cb.reject(new Error("Worker pool destroyed")),
+        );
+        this._workerCallbacks.clear();
+      }
+      this._useWorkers = false;
+    },
+
+    processCardWithWorker(imageBitmap, settings) {
+      const taskId = ++this._workerTaskId;
+      const worker =
+        this._workerPool[this._workerRR++ % this._workerPool.length];
+
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          this._workerCallbacks.delete(taskId);
+          reject(new Error("Worker timeout"));
+        }, 30000);
+
+        this._workerCallbacks.set(taskId, {
+          resolve: (data) => {
+            clearTimeout(timeout);
+            resolve(data);
+          },
+          reject: (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          },
+        });
+
+        worker.postMessage({ taskId, imageBitmap, settings }, [imageBitmap]);
+      });
+    },
+
     getPrefetchCanvas() {
       if (!this._prefetchCanvas) {
         this._prefetchCanvas = document.createElement("canvas");
@@ -2546,6 +2643,7 @@ createApp({
       const cardW = Number(this.settings.cardWidth) * scale;
       const cardH = Number(this.settings.cardHeight) * scale;
       const bleed = this.settings.bleedMm || 0;
+      const scaleFactor = 12; // 300 DPI
 
       const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
 
@@ -2555,55 +2653,63 @@ createApp({
 
       try {
         const imgObj = await this.loadImage(src);
-        const canvas = this.getPrefetchCanvas();
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-        const scaleFactor = 12; // 300 DPI
-        const targetW = (cardW + bleed * 2) * scaleFactor;
-        const targetH = (cardH + bleed * 2) * scaleFactor;
+        if (this._useWorkers) {
+          // Worker path: create transferable ImageBitmap and offload processing
+          const bitmap = await createImageBitmap(imgObj);
+          await this.processCardWithWorker(bitmap, {
+            cardW,
+            cardH,
+            bleed,
+            pageBg: this.settings.pageBg,
+            proxyMarker: this.settings.proxyMarker,
+            scaleFactor,
+            cacheKey,
+            checkCache: false,
+            returnData: false,
+          });
+        } else {
+          // Fallback: create a dedicated canvas per call (avoids shared-canvas corruption)
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-        // Resize only if necessary (expensive op)
-        if (canvas.width !== targetW || canvas.height !== targetH) {
+          const targetW = (cardW + bleed * 2) * scaleFactor;
+          const targetH = (cardH + bleed * 2) * scaleFactor;
           canvas.width = targetW;
           canvas.height = targetH;
+
+          ctx.clearRect(0, 0, targetW, targetH);
+          ctx.fillStyle = this.settings.pageBg;
+          ctx.fillRect(0, 0, targetW, targetH);
+
+          const targetRatio = cardW / cardH;
+          const imgRatio = imgObj.width / imgObj.height;
+          let sWidth, sHeight, sx, sy;
+
+          if (imgRatio > targetRatio) {
+            sHeight = imgObj.height;
+            sWidth = sHeight * targetRatio;
+            sy = 0;
+            sx = (imgObj.width - sWidth) / 2;
+          } else {
+            sWidth = imgObj.width;
+            sHeight = sWidth / targetRatio;
+            sx = 0;
+            sy = (imgObj.height - sHeight) / 2;
+          }
+
+          ctx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, targetW, targetH);
+
+          if (this.settings.proxyMarker) {
+            ctx.font = `bold ${targetH * 0.025}px Arial`;
+            ctx.fillStyle = "rgba(255,255,255,0.8)";
+            ctx.textAlign = "center";
+            ctx.fillText("PROXY", targetW / 2, targetH - targetH * 0.035);
+          }
+
+          const croppedData = canvas.toDataURL("image/jpeg", 0.85);
+          await this.saveToCache(cacheKey, croppedData);
         }
-
-        const canvasW = canvas.width;
-        const canvasH = canvas.height;
-
-        ctx.clearRect(0, 0, canvasW, canvasH);
-        ctx.fillStyle = this.settings.pageBg;
-        ctx.fillRect(0, 0, canvasW, canvasH);
-
-        const targetRatio = cardW / cardH;
-        const imgRatio = imgObj.width / imgObj.height;
-
-        let sWidth, sHeight, sx, sy;
-
-        if (imgRatio > targetRatio) {
-          sHeight = imgObj.height;
-          sWidth = sHeight * targetRatio;
-          sy = 0;
-          sx = (imgObj.width - sWidth) / 2;
-        } else {
-          sWidth = imgObj.width;
-          sHeight = sWidth / targetRatio;
-          sx = 0;
-          sy = (imgObj.height - sHeight) / 2;
-        }
-
-        ctx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, canvasW, canvasH);
-
-        if (this.settings.proxyMarker) {
-          ctx.font = `bold ${canvasH * 0.025}px Arial`;
-          ctx.fillStyle = "rgba(255,255,255,0.8)";
-          ctx.textAlign = "center";
-          ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
-        }
-
-        // Compress to JPEG (0.85 is a good balance for disk storage vs quality)
-        const croppedData = canvas.toDataURL("image/jpeg", 0.85);
-        await this.saveToCache(cacheKey, croppedData);
       } catch (e) {
         console.warn("Prefetch failed for", src, e);
       }
@@ -2663,7 +2769,11 @@ createApp({
       this.prefetchCurrent = 0;
 
       const tasks = uncached.slice(); // Copy so splice doesn't affect original
-      const BATCH_SIZE = 4;
+      const BATCH_SIZE = this._useWorkers
+        ? this._workerPool
+          ? this._workerPool.length
+          : 4
+        : 4;
 
       const processBatch = async () => {
         // Stop if a new run has started
@@ -3010,59 +3120,72 @@ createApp({
         // Check IDB Cache
         let croppedData = await this.getFromCache(cacheKey);
 
-        // If not in cache, draw and process it (Fallback for whatever reason)
+        // If not in cache, process the image (offload to worker if available)
         if (!croppedData) {
           const imgObj = await this.loadImage(src);
 
-          const canvasW = canvas.width;
-          const canvasH = canvas.height;
-
-          // Clear and Fill
-          ctx.clearRect(0, 0, canvasW, canvasH);
-          ctx.fillStyle = settings.pageBg;
-          ctx.fillRect(0, 0, canvasW, canvasH);
-
-          // Calculate scaling
-          const targetRatio = w / h;
-          const imgRatio = imgObj.width / imgObj.height;
-          let sWidth, sHeight, sx, sy;
-
-          if (imgRatio > targetRatio) {
-            sHeight = imgObj.height;
-            sWidth = sHeight * targetRatio;
-            sy = 0;
-            sx = (imgObj.width - sWidth) / 2;
+          if (this._useWorkers) {
+            // Worker path: offload canvas processing off the main thread
+            const bitmap = await createImageBitmap(imgObj);
+            const result = await this.processCardWithWorker(bitmap, {
+              cardW: w,
+              cardH: h,
+              bleed,
+              pageBg: settings.pageBg,
+              proxyMarker: settings.proxyMarker,
+              scaleFactor: 12,
+              cacheKey,
+              checkCache: false,
+              returnData: true,
+            });
+            croppedData = result.dataUrl;
           } else {
-            sWidth = imgObj.width;
-            sHeight = sWidth / targetRatio;
-            sx = 0;
-            sy = (imgObj.height - sHeight) / 2;
+            // Fallback: use the provided canvas (sequential, safe during PDF gen)
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+
+            ctx.clearRect(0, 0, canvasW, canvasH);
+            ctx.fillStyle = settings.pageBg;
+            ctx.fillRect(0, 0, canvasW, canvasH);
+
+            const targetRatio = w / h;
+            const imgRatio = imgObj.width / imgObj.height;
+            let sWidth, sHeight, sx, sy;
+
+            if (imgRatio > targetRatio) {
+              sHeight = imgObj.height;
+              sWidth = sHeight * targetRatio;
+              sy = 0;
+              sx = (imgObj.width - sWidth) / 2;
+            } else {
+              sWidth = imgObj.width;
+              sHeight = sWidth / targetRatio;
+              sx = 0;
+              sy = (imgObj.height - sHeight) / 2;
+            }
+
+            ctx.drawImage(
+              imgObj,
+              sx,
+              sy,
+              sWidth,
+              sHeight,
+              0,
+              0,
+              canvasW,
+              canvasH,
+            );
+
+            if (settings.proxyMarker) {
+              ctx.font = `bold ${canvasH * 0.025}px Arial`;
+              ctx.fillStyle = "rgba(255,255,255,0.8)";
+              ctx.textAlign = "center";
+              ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
+            }
+
+            croppedData = canvas.toDataURL("image/jpeg", 0.85);
+            await this.saveToCache(cacheKey, croppedData);
           }
-          ctx.drawImage(
-            imgObj,
-            sx,
-            sy,
-            sWidth,
-            sHeight,
-            0,
-            0,
-            canvasW,
-            canvasH,
-          );
-
-          // Overlay Proxy Marker
-          if (settings.proxyMarker) {
-            ctx.font = `bold ${canvasH * 0.025}px Arial`;
-            ctx.fillStyle = "rgba(255,255,255,0.8)";
-            ctx.textAlign = "center";
-            ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
-          }
-
-          // Compress to JPEG (0.85 matches prefetch)
-          croppedData = canvas.toDataURL("image/jpeg", 0.85);
-
-          // Save to cache
-          await this.saveToCache(cacheKey, croppedData);
         }
 
         // Add the (potentially cached) image data to PDF
