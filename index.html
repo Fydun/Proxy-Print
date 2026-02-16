@@ -447,10 +447,10 @@
               >
                 <div
                   class="relative h-48 bg-page flex items-center justify-center overflow-hidden cursor-zoom-in"
-                  @click="previewImage = (card.showBack && card.backSrc) ? card.backSrc : card.src"
+                  @click="previewImage = resolveImage((card.showBack && card.backSrc) ? card.backSrc : card.src)"
                 >
                   <img
-                    :src="(card.showBack && card.backSrc) ? (card.smallBackSrc || card.backSrc) : (card.smallSrc || card.src)"
+                    :src="resolveImage((card.showBack && card.backSrc) ? (card.smallBackSrc || card.backSrc) : (card.smallSrc || card.src))"
                     class="w-full h-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
                     loading="lazy"
                     crossorigin="anonymous"

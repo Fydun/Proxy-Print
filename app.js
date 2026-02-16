@@ -71,6 +71,9 @@ createApp({
       statusMessage: "",
       errorMessage: "",
 
+      // Local Image Cache (url → dataUrl)
+      localImages: {},
+
       // Modals
       showImportModal: false,
       showVersionModal: false,
@@ -300,6 +303,9 @@ createApp({
 
     // Initialize parallel image processing workers
     this.initWorkerPool();
+
+    // Load locally cached thumbnails, then download any missing ones
+    await this.loadLocalImages();
 
     // Kick off prefetch on load
     this.runPrefetch();
@@ -588,6 +594,7 @@ createApp({
       }
 
       this.saveSession();
+      this.loadLocalImages();
       this.statusMessage = `Updated ${updatedCount} cards to ${targetLang.toUpperCase()}.`;
 
       // Clear message after 3 seconds
@@ -1060,6 +1067,7 @@ createApp({
       }
 
       // Start background caching for newly added cards
+      this.loadLocalImages();
       this.runPrefetch();
     },
 
@@ -1600,7 +1608,8 @@ createApp({
       this.cards = nextCards;
       this.isImporting = false;
 
-      // Start background caching of high-res images
+      // Cache thumbnails locally, then start high-res prefetch
+      this.loadLocalImages();
       this.runPrefetch();
 
       if (this.importErrors.length > 0) {
@@ -2246,6 +2255,7 @@ createApp({
       }
 
       this.saveSession();
+      this.loadLocalImages();
       this.showVersionModal = false;
       this.activeCardIndex = null;
     },
@@ -2409,8 +2419,8 @@ createApp({
         this.cards.forEach((card) => {
           for (let i = 0; i < card.qty; i++) {
             printQueue.push({
-              src: card.smallSrc || card.src,
-              backSrc: card.smallBackSrc || card.backSrc,
+              src: this.resolveImage(card.smallSrc || card.src),
+              backSrc: this.resolveImage(card.smallBackSrc || card.backSrc),
               name: card.name,
             });
           }
@@ -3207,6 +3217,87 @@ createApp({
         doc.text("Img Error", x + 2, y + 5);
       }
     },
+    /* --- Local Image Cache (Thumbnails + Display Images) --- */
+
+    resolveImage(url) {
+      if (!url || url.startsWith("data:")) return url;
+      return this.localImages[url] || url;
+    },
+
+    async downloadThumbnail(url) {
+      if (!url || url.startsWith("data:")) return url;
+
+      const cacheKey = `thumb_${url}`;
+      const cached = await this.getFromCache(cacheKey);
+      if (cached) return cached;
+
+      // Download via loadImage (handles CORS retries) then encode to data URL
+      const img = await this.loadImage(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+
+      await this.saveToCache(cacheKey, dataUrl);
+      return dataUrl;
+    },
+
+    async loadLocalImages() {
+      // Collect all remote image URLs from cards
+      const urls = new Set();
+      this.cards.forEach((c) => {
+        [c.smallSrc, c.smallBackSrc, c.src, c.backSrc].forEach((u) => {
+          if (u && !u.startsWith("data:") && !this.localImages[u]) urls.add(u);
+        });
+      });
+
+      if (urls.size === 0) return;
+
+      // Phase 1: Load from IndexedDB (instant, no network)
+      const uncached = [];
+      for (const url of urls) {
+        const cacheKey = `thumb_${url}`;
+        try {
+          const cached = await this.getFromCache(cacheKey);
+          if (cached) {
+            this.localImages[url] = cached;
+          } else {
+            uncached.push(url);
+          }
+        } catch {
+          uncached.push(url);
+        }
+      }
+
+      // Phase 2: Download missing in background (non-blocking)
+      if (uncached.length > 0) {
+        this.downloadMissingThumbnails(uncached);
+      }
+    },
+
+    async downloadMissingThumbnails(urls) {
+      const BATCH = 6;
+      for (let i = 0; i < urls.length; i += BATCH) {
+        const batch = urls.slice(i, i + BATCH);
+        await Promise.all(
+          batch.map(async (url) => {
+            try {
+              const dataUrl = await this.downloadThumbnail(url);
+              this.localImages[url] = dataUrl;
+            } catch (e) {
+              console.warn("Thumb cache fail:", url, e.message);
+            }
+          }),
+        );
+        // Breathe between batches
+        if (i + BATCH < urls.length) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+    },
+
     async checkStorageUsage() {
       if (navigator.storage && navigator.storage.estimate) {
         const estimate = await navigator.storage.estimate();
@@ -3230,6 +3321,7 @@ createApp({
 
       await this.clearCacheDB();
       if (this._processedImgCache) this._processedImgCache.clear();
+      this.localImages = {};
 
       await this.checkStorageUsage();
       this.statusMessage = "Image cache cleared.";
