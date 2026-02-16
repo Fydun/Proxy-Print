@@ -675,13 +675,13 @@ createApp({
       // Remove supertypes to find the "Real" type
       t = t.replace(/\b(basic|legendary|ongoing|snow|world)\b/g, "").trim();
 
-      if (t.includes("battle")) return 1;
+      if (t.includes("creature")) return 1;
       if (t.includes("planeswalker")) return 2;
-      if (t.includes("creature")) return 3;
-      if (t.includes("sorcery")) return 4;
-      if (t.includes("instant")) return 5;
-      if (t.includes("artifact")) return 6;
-      if (t.includes("enchantment")) return 7;
+      if (t.includes("sorcery")) return 3;
+      if (t.includes("instant")) return 4;
+      if (t.includes("artifact")) return 5;
+      if (t.includes("enchantment")) return 6;
+      if (t.includes("battle")) return 7;
       if (t.includes("land")) return 8;
       return 99;
     },
@@ -793,8 +793,40 @@ createApp({
 
       const modifier = this.sortState.order === "asc" ? 1 : -1;
 
-      this.cards.sort((a, b) => {
-        let valA, valB;
+      // Auto sort: Cards first, then Color > Type > CMC > Name
+      if (key === "auto") {
+        this.cards.sort((a, b) => {
+          // 1. Cards (0) before Tokens/Extras (1)
+          const catA = this.getCardCategory(a);
+          const catB = this.getCardCategory(b);
+          if (catA !== catB) return (catA - catB) * modifier;
+
+          // 2. Color (WUBRG order)
+          const colA = this.calculateColorRank(a);
+          const colB = this.calculateColorRank(b);
+          if (colA !== colB) return (colA - colB) * modifier;
+
+          // 3. Type (Battle > Planeswalker > Creature > ... > Land)
+          const typeA = this.calculateTypeRank(a.type_line);
+          const typeB = this.calculateTypeRank(b.type_line);
+          if (typeA !== typeB) return (typeA - typeB) * modifier;
+
+          // 4. CMC (low to high)
+          const cmcA = a.cmc || 0;
+          const cmcB = b.cmc || 0;
+          if (cmcA !== cmcB) return (cmcA - cmcB) * modifier;
+
+          // 5. Name (alphabetical)
+          const nameA = a.name.toLowerCase();
+          const nameB = b.name.toLowerCase();
+          if (nameA < nameB) return -1 * modifier;
+          if (nameA > nameB) return 1 * modifier;
+
+          return 0;
+        });
+      } else {
+        this.cards.sort((a, b) => {
+          let valA, valB;
 
         if (key === "color") {
           valA = this.calculateColorRank(a);
