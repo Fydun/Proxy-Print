@@ -125,6 +125,11 @@ createApp({
       previewPages: [],
       backdropInteract: false,
       storageUsage: "",
+
+      // Prefetch State
+      prefetchTotal: 0,
+      prefetchCurrent: 0,
+      prefetchRunId: 0,
     };
   },
   computed: {
@@ -234,13 +239,24 @@ createApp({
       this.saveSession();
     },
     settings: {
-      handler(newVal) {
-        // Clear cache on visual settings change to force re-render
-        if (this._processedImgCache) {
-          this._processedImgCache.clear();
+      handler(newVal, oldVal) {
+        // Only clear image cache if visual settings changed (not darkMode)
+        const visualChanged =
+          oldVal &&
+          (newVal.cardWidth !== oldVal.cardWidth ||
+            newVal.cardHeight !== oldVal.cardHeight ||
+            newVal.cardScale !== oldVal.cardScale ||
+            newVal.bleedMm !== oldVal.bleedMm ||
+            newVal.pageBg !== oldVal.pageBg ||
+            newVal.proxyMarker !== oldVal.proxyMarker ||
+            newVal.cardPreset !== oldVal.cardPreset);
+
+        if (visualChanged) {
+          if (this._processedImgCache) {
+            this._processedImgCache.clear();
+          }
+          this.clearCacheDB();
         }
-        // Also clear persistent DB
-        this.clearCacheDB();
 
         // Auto-set dimensions based on presets
         if (newVal.cardPreset === "standard") {
@@ -267,8 +283,10 @@ createApp({
           localStorage.setItem("darkMode", "false");
         }
         this.saveSession();
-        // Trigger prefetch with new settings
-        this.runPrefetch();
+        // Trigger prefetch only if visual settings changed
+        if (visualChanged) {
+          this.runPrefetch();
+        }
       },
       deep: true,
     },
@@ -356,9 +374,7 @@ createApp({
           if (parsed.preferredVersions) {
             this.preferredVersions = parsed.preferredVersions;
           }
-
-          // Start background caching for restored cards
-          this.runPrefetch();
+          // Note: runPrefetch() is called by mounted() after loadSession() completes
         }
       } catch (e) {
         console.error("Load error", e);
@@ -410,6 +426,7 @@ createApp({
           }
 
           this.saveSession();
+          this.runPrefetch();
         } catch (err) {
           this.errorMessage = "Error parsing JSON.";
         }
@@ -526,10 +543,26 @@ createApp({
           if (newData) {
             card.src = getImg(newData);
 
+            // Update preview thumbnails
+            const getSmallImg = (cData) => {
+              if (cData.card_faces && cData.card_faces[0].image_uris) {
+                return cData.card_faces[0].image_uris.small || cData.card_faces[0].image_uris.normal || getImg(cData);
+              }
+              return cData.image_uris?.small || cData.image_uris?.normal || getImg(cData);
+            };
+            const getSmallBackImg = (cData) => {
+              if (cData.card_faces && cData.card_faces[1]?.image_uris) {
+                return cData.card_faces[1].image_uris.small || cData.card_faces[1].image_uris.normal || getBackImg(cData);
+              }
+              return null;
+            };
+            card.smallSrc = getSmallImg(newData);
+
             // Handle Back faces (DFC)
             const newBack = getBackImg(newData);
             if (newBack) {
               card.backSrc = newBack;
+              card.smallBackSrc = getSmallBackImg(newData);
               card.dfcData = { frontSrc: card.src, backSrc: newBack };
             }
 
@@ -988,6 +1021,9 @@ createApp({
         }
         await new Promise((r) => setTimeout(r, 100)); // Be nice to API
       }
+
+      // Start background caching for newly added cards
+      this.runPrefetch();
     },
 
     /* --- Scryfall API: Import & Deck Sync --- */
@@ -2121,9 +2157,11 @@ createApp({
         if (card.isBackFace) {
           // If we are the back face, take the back image (or front if no back exists)
           card.src = version.backSrc || version.fullSrc;
+          card.smallSrc = version.backPreviewSrc || version.previewSrc || card.src;
         } else {
           // If we are front face, always take front
           card.src = version.fullSrc;
+          card.smallSrc = version.previewSrc || card.src;
         }
 
         // IMPORTANT: Ensure it stays single-sided!
@@ -2141,14 +2179,23 @@ createApp({
 
         const isVisualBack = card.name.includes("(Back)"); // Legacy check
 
-        if (isVisualBack) card.src = version.backSrc || version.fullSrc;
-        else card.src = version.fullSrc;
+        if (isVisualBack) {
+          card.src = version.backSrc || version.fullSrc;
+          card.smallSrc = version.backPreviewSrc || version.previewSrc || card.src;
+        } else {
+          card.src = version.fullSrc;
+          card.smallSrc = version.previewSrc || card.src;
+        }
 
         if (version.backSrc) {
           card.backSrc =
             isVisualBack || card.name.includes("(Front)")
               ? null
               : version.backSrc;
+          card.smallBackSrc =
+            isVisualBack || card.name.includes("(Front)")
+              ? null
+              : (version.backPreviewSrc || version.backSrc);
           card.dfcData = {
             frontSrc: version.fullSrc,
             backSrc: version.backSrc,
@@ -2156,6 +2203,7 @@ createApp({
           };
         } else {
           card.backSrc = null;
+          card.smallBackSrc = null;
           card.dfcData = null;
         }
       }
@@ -2174,8 +2222,7 @@ createApp({
       this.isDraggingOverModal = false;
       const files = e.dataTransfer.files;
       if (files.length > 0 && this.activeCardIndex !== null) {
-        const mockEvent = { target: { files: files, value: "" } };
-        this.handleCustomVersionUpload(mockEvent);
+        this.handleCustomVersionUpload(files[0]);
       }
     },
 
@@ -2240,7 +2287,15 @@ createApp({
     loadImage(src) {
       // 1. Check Promise Cache (Deduplication within this print session)
       if (!this._imgPromiseCache) this._imgPromiseCache = new Map();
-      if (this._imgPromiseCache.has(src)) return this._imgPromiseCache.get(src);
+      const cached = this._imgPromiseCache.get(src);
+      // Return cached promise only if it hasn't been rejected
+      if (cached) {
+        // If the promise was rejected, remove it so we can retry
+        return cached.catch((err) => {
+          this._imgPromiseCache.delete(src);
+          throw err;
+        });
+      }
 
       const loadPromise = new Promise((resolve, reject) => {
         // 2. Local Data URIs
@@ -2382,7 +2437,17 @@ createApp({
 
     // --- IndexedDB Cache Helpers ---
     async initCacheDB() {
-      return new Promise((resolve, reject) => {
+      // Reuse cached connection if available and not closed
+      if (this._cacheDB) {
+        try {
+          // Test if connection is still alive by checking objectStoreNames
+          this._cacheDB.objectStoreNames;
+          return this._cacheDB;
+        } catch {
+          this._cacheDB = null;
+        }
+      }
+      const db = await new Promise((resolve, reject) => {
         const request = indexedDB.open("MTGProxyImageCache", 1);
         request.onupgradeneeded = (e) => {
           const db = e.target.result;
@@ -2393,6 +2458,8 @@ createApp({
         request.onsuccess = (e) => resolve(e.target.result);
         request.onerror = (e) => reject(e);
       });
+      this._cacheDB = db;
+      return db;
     },
 
     async saveToCache(key, data) {
@@ -2652,11 +2719,8 @@ createApp({
           );
           let needsBackPage = useDuplex;
 
-          // --- CHUNKING LOGIC START ---
-          // Every 5 cards, we pause to let the UI update and GC run
-          // 20 was too aggressive for large decks (500+)
-          // ----------------------------
-          if (b % 1 === 0) await new Promise((r) => setTimeout(r, 0));
+          // Yield every batch to let the UI update and GC run
+          await new Promise((r) => setTimeout(r, 0));
 
           // Draw Fronts
           for (let i = 0; i < batch.length; i++) {
@@ -2713,8 +2777,6 @@ createApp({
                 console.error("Could not even draw error box", drawErr);
               }
             }
-
-            // Update Progress Bar
 
             // Update Progress Bar
             totalProcessed++;
@@ -2817,6 +2879,8 @@ createApp({
         this.statusMessage = "";
       } finally {
         this.isGenerating = false;
+        // Resume prefetch if it was interrupted by PDF generation
+        this.runPrefetch();
       }
     },
 
@@ -2921,7 +2985,7 @@ createApp({
           );
 
           // Overlay Proxy Marker
-          if (this.settings.proxyMarker) {
+          if (settings.proxyMarker) {
             ctx.font = `bold ${canvasH * 0.025}px Arial`;
             ctx.fillStyle = "rgba(255,255,255,0.8)";
             ctx.textAlign = "center";
