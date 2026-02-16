@@ -124,6 +124,12 @@ createApp({
       sortState: { key: "", order: "asc" },
       previewPages: [],
       backdropInteract: false,
+      storageUsage: "",
+
+      // Prefetch State
+      prefetchTotal: 0,
+      prefetchCurrent: 0,
+      prefetchRunId: 0,
     };
   },
   computed: {
@@ -233,7 +239,25 @@ createApp({
       this.saveSession();
     },
     settings: {
-      handler(newVal) {
+      handler(newVal, oldVal) {
+        // Only clear image cache if visual settings changed (not darkMode)
+        const visualChanged =
+          oldVal &&
+          (newVal.cardWidth !== oldVal.cardWidth ||
+            newVal.cardHeight !== oldVal.cardHeight ||
+            newVal.cardScale !== oldVal.cardScale ||
+            newVal.bleedMm !== oldVal.bleedMm ||
+            newVal.pageBg !== oldVal.pageBg ||
+            newVal.proxyMarker !== oldVal.proxyMarker ||
+            newVal.cardPreset !== oldVal.cardPreset);
+
+        if (visualChanged) {
+          if (this._processedImgCache) {
+            this._processedImgCache.clear();
+          }
+          this.clearCacheDB();
+        }
+
         // Auto-set dimensions based on presets
         if (newVal.cardPreset === "standard") {
           newVal.cardWidth = 63;
@@ -259,13 +283,23 @@ createApp({
           localStorage.setItem("darkMode", "false");
         }
         this.saveSession();
+        // Trigger prefetch only if visual settings changed
+        if (visualChanged) {
+          this.runPrefetch();
+        }
       },
       deep: true,
+    },
+    showHelpModal(val) {
+      if (val) this.checkStorageUsage();
     },
   },
   async mounted() {
     //Wait for saved settings to load from IndexedDB
     await this.loadSession();
+
+    // Kick off prefetch on load
+    this.runPrefetch();
 
     //Attach Event Listeners
     window.addEventListener("keydown", this.handleKeydown);
@@ -340,6 +374,7 @@ createApp({
           if (parsed.preferredVersions) {
             this.preferredVersions = parsed.preferredVersions;
           }
+          // Note: runPrefetch() is called by mounted() after loadSession() completes
         }
       } catch (e) {
         console.error("Load error", e);
@@ -391,6 +426,7 @@ createApp({
           }
 
           this.saveSession();
+          this.runPrefetch();
         } catch (err) {
           this.errorMessage = "Error parsing JSON.";
         }
@@ -507,10 +543,26 @@ createApp({
           if (newData) {
             card.src = getImg(newData);
 
+            // Update preview thumbnails
+            const getSmallImg = (cData) => {
+              if (cData.card_faces && cData.card_faces[0].image_uris) {
+                return cData.card_faces[0].image_uris.small || cData.card_faces[0].image_uris.normal || getImg(cData);
+              }
+              return cData.image_uris?.small || cData.image_uris?.normal || getImg(cData);
+            };
+            const getSmallBackImg = (cData) => {
+              if (cData.card_faces && cData.card_faces[1]?.image_uris) {
+                return cData.card_faces[1].image_uris.small || cData.card_faces[1].image_uris.normal || getBackImg(cData);
+              }
+              return null;
+            };
+            card.smallSrc = getSmallImg(newData);
+
             // Handle Back faces (DFC)
             const newBack = getBackImg(newData);
             if (newBack) {
               card.backSrc = newBack;
+              card.smallBackSrc = getSmallBackImg(newData);
               card.dfcData = { frontSrc: card.src, backSrc: newBack };
             }
 
@@ -969,6 +1021,9 @@ createApp({
         }
         await new Promise((r) => setTimeout(r, 100)); // Be nice to API
       }
+
+      // Start background caching for newly added cards
+      this.runPrefetch();
     },
 
     /* --- Scryfall API: Import & Deck Sync --- */
@@ -1392,7 +1447,9 @@ createApp({
                   }
 
                   let src = "",
-                    backSrc = null;
+                    backSrc = null,
+                    smallSrc = "",
+                    smallBackSrc = null;
 
                   // Image logic
                   if (
@@ -1402,12 +1459,24 @@ createApp({
                     src =
                       scryCard.card_faces[0].image_uris.png ||
                       scryCard.card_faces[0].image_uris.large;
+                    smallSrc =
+                      scryCard.card_faces[0].image_uris.small ||
+                      scryCard.card_faces[0].image_uris.normal ||
+                      src;
                     backSrc =
                       scryCard.card_faces[1].image_uris?.png ||
                       scryCard.card_faces[1].image_uris?.large;
+                    smallBackSrc =
+                      scryCard.card_faces[1].image_uris?.small ||
+                      scryCard.card_faces[1].image_uris?.normal ||
+                      backSrc;
                   } else {
                     src =
                       scryCard.image_uris?.png || scryCard.image_uris?.large;
+                    smallSrc =
+                      scryCard.image_uris?.small ||
+                      scryCard.image_uris?.normal ||
+                      src;
                   }
 
                   if (src) {
@@ -1417,7 +1486,9 @@ createApp({
                       setName: scryCard.set_name,
                       cn: scryCard.collector_number,
                       src,
+                      smallSrc,
                       backSrc,
+                      smallBackSrc,
                       showBack: false,
                       qty: target.qty,
                       dfcData: null,
@@ -1491,6 +1562,9 @@ createApp({
 
       this.cards = nextCards;
       this.isImporting = false;
+
+      // Start background caching of high-res images
+      this.runPrefetch();
 
       if (this.importErrors.length > 0) {
         this.importStatus = `Complete. ${this.importErrors.length} cards could not be found.`;
@@ -1779,18 +1853,30 @@ createApp({
             if (exists) return;
 
             let src = "",
-              backSrc = null;
+              backSrc = null,
+              smallSrc = "",
+              smallBackSrc = null;
 
             // Handle double-faced tokens (e.g. Incubator // Phyrexian)
             if (token.card_faces && token.card_faces[0].image_uris) {
               src =
                 token.card_faces[0].image_uris.png ||
                 token.card_faces[0].image_uris.large;
+              smallSrc =
+                token.card_faces[0].image_uris.small ||
+                token.card_faces[0].image_uris.normal ||
+                src;
               backSrc =
                 token.card_faces[1].image_uris?.png ||
                 token.card_faces[1].image_uris?.large;
+              smallBackSrc =
+                token.card_faces[1].image_uris?.small ||
+                token.card_faces[1].image_uris?.normal ||
+                backSrc;
             } else {
               src = token.image_uris?.png || token.image_uris?.large;
+              smallSrc =
+                token.image_uris?.small || token.image_uris?.normal || src;
             }
 
             if (src) {
@@ -1799,7 +1885,9 @@ createApp({
                 set: token.set.toUpperCase(),
                 cn: token.collector_number,
                 src,
+                smallSrc,
                 backSrc,
+                smallBackSrc,
                 showBack: false,
                 qty: 1,
                 dfcData: null,
@@ -2069,9 +2157,11 @@ createApp({
         if (card.isBackFace) {
           // If we are the back face, take the back image (or front if no back exists)
           card.src = version.backSrc || version.fullSrc;
+          card.smallSrc = version.backPreviewSrc || version.previewSrc || card.src;
         } else {
           // If we are front face, always take front
           card.src = version.fullSrc;
+          card.smallSrc = version.previewSrc || card.src;
         }
 
         // IMPORTANT: Ensure it stays single-sided!
@@ -2089,14 +2179,23 @@ createApp({
 
         const isVisualBack = card.name.includes("(Back)"); // Legacy check
 
-        if (isVisualBack) card.src = version.backSrc || version.fullSrc;
-        else card.src = version.fullSrc;
+        if (isVisualBack) {
+          card.src = version.backSrc || version.fullSrc;
+          card.smallSrc = version.backPreviewSrc || version.previewSrc || card.src;
+        } else {
+          card.src = version.fullSrc;
+          card.smallSrc = version.previewSrc || card.src;
+        }
 
         if (version.backSrc) {
           card.backSrc =
             isVisualBack || card.name.includes("(Front)")
               ? null
               : version.backSrc;
+          card.smallBackSrc =
+            isVisualBack || card.name.includes("(Front)")
+              ? null
+              : (version.backPreviewSrc || version.backSrc);
           card.dfcData = {
             frontSrc: version.fullSrc,
             backSrc: version.backSrc,
@@ -2104,6 +2203,7 @@ createApp({
           };
         } else {
           card.backSrc = null;
+          card.smallBackSrc = null;
           card.dfcData = null;
         }
       }
@@ -2122,8 +2222,7 @@ createApp({
       this.isDraggingOverModal = false;
       const files = e.dataTransfer.files;
       if (files.length > 0 && this.activeCardIndex !== null) {
-        const mockEvent = { target: { files: files, value: "" } };
-        this.handleCustomVersionUpload(mockEvent);
+        this.handleCustomVersionUpload(files[0]);
       }
     },
 
@@ -2148,10 +2247,55 @@ createApp({
 
     /* --- PDF Generation & Preview --- */
 
+    handleImageError(e, item) {
+      const img = e.target;
+      const srcToCheck = img.getAttribute("src"); // Get raw src
+
+      // Stop if we already fixed this URL to prevent loops
+      if (srcToCheck && srcToCheck.includes("fix=cors")) return;
+
+      console.warn("Fixing image source (CORS/Cache):", srcToCheck);
+
+      const fixUrl = (url) => {
+        if (!url) return url;
+        // Clean any existing timestamps
+        let clean = url.split("?")[0];
+        // Append static fix that allows browser caching
+        return clean + "?fix=cors";
+      };
+
+      // 1. If we passed a Card object, update it persistently
+      if (item && typeof item === "object") {
+        if (item.src && srcToCheck.includes(item.src)) {
+          item.src = fixUrl(item.src);
+        } else if (item.backSrc && srcToCheck.includes(item.backSrc)) {
+          item.backSrc = fixUrl(item.backSrc);
+        }
+        // Force save so the fix remembers next reload
+        this.saveSession();
+      }
+      // 2. If it's the Preview string
+      else if (item === "preview") {
+        this.previewImage = fixUrl(this.previewImage);
+      }
+      // 3. Fallback for direct DOM (though Vue update above should handle it)
+      else {
+        img.src = fixUrl(srcToCheck);
+      }
+    },
+
     loadImage(src) {
       // 1. Check Promise Cache (Deduplication within this print session)
       if (!this._imgPromiseCache) this._imgPromiseCache = new Map();
-      if (this._imgPromiseCache.has(src)) return this._imgPromiseCache.get(src);
+      const cached = this._imgPromiseCache.get(src);
+      // Return cached promise only if it hasn't been rejected
+      if (cached) {
+        // If the promise was rejected, remove it so we can retry
+        return cached.catch((err) => {
+          this._imgPromiseCache.delete(src);
+          throw err;
+        });
+      }
 
       const loadPromise = new Promise((resolve, reject) => {
         // 2. Local Data URIs
@@ -2289,32 +2433,248 @@ createApp({
       }
     },
 
-async generatePDF() {
+    /* --- Optimization: Pre-fetching (IndexedDB) --- */
+
+    // --- IndexedDB Cache Helpers ---
+    async initCacheDB() {
+      // Reuse cached connection if available and not closed
+      if (this._cacheDB) {
+        try {
+          // Test if connection is still alive by checking objectStoreNames
+          this._cacheDB.objectStoreNames;
+          return this._cacheDB;
+        } catch {
+          this._cacheDB = null;
+        }
+      }
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("MTGProxyImageCache", 1);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains("images")) {
+            db.createObjectStore("images");
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e);
+      });
+      this._cacheDB = db;
+      return db;
+    },
+
+    async saveToCache(key, data) {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readwrite");
+        const store = tx.objectStore("images");
+        store.put(data, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    },
+
+    async getFromCache(key) {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readonly");
+        const store = tx.objectStore("images");
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e);
+      });
+    },
+
+    async clearCacheDB() {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readwrite");
+        const store = tx.objectStore("images");
+        store.clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    },
+
+    getPrefetchCanvas() {
+      if (!this._prefetchCanvas) {
+        this._prefetchCanvas = document.createElement("canvas");
+      }
+      return this._prefetchCanvas;
+    },
+
+    async processCardToCache(src) {
+      if (!src) return;
+
+      const scale = Number(this.settings.cardScale) / 100;
+      const cardW = Number(this.settings.cardWidth) * scale;
+      const cardH = Number(this.settings.cardHeight) * scale;
+      const bleed = this.settings.bleedMm || 0;
+
+      const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+
+      // Check IDB first
+      const cached = await this.getFromCache(cacheKey);
+      if (cached) return;
+
+      try {
+        const imgObj = await this.loadImage(src);
+        const canvas = this.getPrefetchCanvas();
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+        const scaleFactor = 12; // 300 DPI
+        const targetW = (cardW + bleed * 2) * scaleFactor;
+        const targetH = (cardH + bleed * 2) * scaleFactor;
+
+        // Resize only if necessary (expensive op)
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+
+        const canvasW = canvas.width;
+        const canvasH = canvas.height;
+
+        ctx.clearRect(0, 0, canvasW, canvasH);
+        ctx.fillStyle = this.settings.pageBg;
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        const targetRatio = cardW / cardH;
+        const imgRatio = imgObj.width / imgObj.height;
+
+        let sWidth, sHeight, sx, sy;
+
+        if (imgRatio > targetRatio) {
+          sHeight = imgObj.height;
+          sWidth = sHeight * targetRatio;
+          sy = 0;
+          sx = (imgObj.width - sWidth) / 2;
+        } else {
+          sWidth = imgObj.width;
+          sHeight = sWidth / targetRatio;
+          sx = 0;
+          sy = (imgObj.height - sHeight) / 2;
+        }
+
+        ctx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, canvasW, canvasH);
+
+        if (this.settings.proxyMarker) {
+          ctx.font = `bold ${canvasH * 0.025}px Arial`;
+          ctx.fillStyle = "rgba(255,255,255,0.8)";
+          ctx.textAlign = "center";
+          ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
+        }
+
+        // Compress to JPEG (0.85 is a good balance for disk storage vs quality)
+        const croppedData = canvas.toDataURL("image/jpeg", 0.85);
+        await this.saveToCache(cacheKey, croppedData);
+      } catch (e) {
+        console.warn("Prefetch failed for", src, e);
+      }
+    },
+
+    async runPrefetch() {
+      // 1. Invalidate previous runs
+      this.prefetchRunId++;
+      const currentRunId = this.prefetchRunId;
+
+      // 2. Clear state immediately
+      if (this.cards.length === 0) {
+        this.prefetchTotal = 0;
+        this.prefetchCurrent = 0;
+        return;
+      }
+
+      if (this.isGenerating) return;
+
+      // Deduplicate sources (Target High-Res SRC)
+      const queue = new Set();
+      this.cards.forEach((c) => {
+        if (c.src) queue.add(c.src);
+        if (c.backSrc) queue.add(c.backSrc);
+      });
+
+      const tasks = Array.from(queue);
+      this.prefetchTotal = tasks.length;
+      this.prefetchCurrent = 0;
+
+      const BATCH_SIZE = 4; // Process N images at a time to be faster
+
+      const processBatch = async () => {
+        // Stop if a new run has started
+        if (this.prefetchRunId !== currentRunId) return;
+
+        if (this.isGenerating || tasks.length === 0) {
+          if (tasks.length === 0) {
+            // Done
+            setTimeout(() => {
+              // Only reset if we are still the active run
+              if (this.prefetchRunId === currentRunId) {
+                this.prefetchTotal = 0;
+                this.prefetchCurrent = 0;
+              }
+            }, 2000);
+          }
+          return;
+        }
+
+        const batch = tasks.splice(0, BATCH_SIZE);
+        await Promise.all(
+          batch.map(async (src) => {
+            // Check again inside loop
+            if (this.prefetchRunId !== currentRunId) return;
+            try {
+              // Race against a 30s timeout to prevent hanging
+              await Promise.race([
+                this.processCardToCache(src),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("Timeout")), 30000),
+                ),
+              ]);
+            } catch (e) {
+              console.warn("Prefetch skip:", src, e.message);
+            } finally {
+              this.prefetchCurrent++;
+            }
+          }),
+        );
+
+        // Breathe
+        setTimeout(processBatch, 20);
+      };
+
+      processBatch();
+    },
+
+    async generatePDF() {
       if (this.cards.length === 0) return;
-      
+
       this.isGenerating = true;
       this.errorMessage = "";
       this.statusMessage = "Initializing PDF generation..."; // Notify user start
-      
+
+      // SNAPSHOT SETTINGS for stability during async generation
+      const currentSettings = JSON.parse(JSON.stringify(this.settings));
+      const useDuplex = this.globalDuplex && this.hasDFC;
+
       // Allow UI to update before heavy lifting starts
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
 
       try {
         const doc = new jsPDF({
           orientation: "portrait",
           unit: "mm",
-          format: this.settings.paperSize,
+          format: currentSettings.paperSize,
         });
 
-        const pageSize = PAPER_SIZES[this.settings.paperSize];
+        const pageSize = PAPER_SIZES[currentSettings.paperSize];
         const pageWidth = pageSize.w;
         const pageHeight = pageSize.h;
 
-        const scale = Number(this.settings.cardScale) / 100;
-        const cardW = Number(this.settings.cardWidth) * scale;
-        const cardH = Number(this.settings.cardHeight) * scale;
-        const gap = Number(this.settings.gapSize);
-        const bleed = Number(this.settings.bleedMm);
+        const scale = Number(currentSettings.cardScale) / 100;
+        const cardW = Number(currentSettings.cardWidth) * scale;
+        const cardH = Number(currentSettings.cardHeight) * scale;
+        const gap = Number(currentSettings.gapSize);
+        const bleed = Number(currentSettings.bleedMm);
 
         let cols = Math.floor((pageWidth - 10) / (cardW + gap));
         let rows = Math.floor((pageHeight - 10) / (cardH + gap));
@@ -2347,6 +2707,7 @@ async generatePDF() {
         const totalBatches = Math.ceil(printQueue.length / itemsPerPage);
         const emptyPages = new Set();
         let totalProcessed = 0; // Track progress
+        const failedCards = []; // Track specific failures
 
         // Process batches
         for (let b = 0; b < totalBatches; b++) {
@@ -2356,40 +2717,78 @@ async generatePDF() {
             b * itemsPerPage,
             (b + 1) * itemsPerPage,
           );
-          let needsBackPage = this.globalDuplex && this.hasDFC;
+          let needsBackPage = useDuplex;
 
-          // --- CHUNKING LOGIC START ---
-          // Every 10 cards, we pause for 0ms to let the UI update
-          // This prevents "Page Unresponsive" errors
-          // ----------------------------
-          
+          // Yield every batch to let the UI update and GC run
+          await new Promise((r) => setTimeout(r, 0));
+
           // Draw Fronts
           for (let i = 0; i < batch.length; i++) {
             const card = batch[i];
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            const x = startX + col * (cardW + gap);
-            const y = startY + row * (cardH + gap);
 
-            await this.drawCardToPDF(
-              doc,
-              ctx,
-              card.src,
-              x,
-              y,
-              cardW,
-              cardH,
-              canvas,
-            );
-            this.drawCutGuides(doc, x, y, cardW, cardH, gap, col, row, cols, rows);
+            try {
+              const col = i % cols;
+              const row = Math.floor(i / cols);
+              const x = startX + col * (cardW + gap);
+              const y = startY + row * (cardH + gap);
+
+              await this.drawCardToPDF(
+                doc,
+                ctx,
+                card.src,
+                x,
+                y,
+                cardW,
+                cardH,
+                canvas,
+                currentSettings,
+              );
+              this.drawCutGuides(
+                doc,
+                x,
+                y,
+                cardW,
+                cardH,
+                gap,
+                col,
+                row,
+                cols,
+                rows,
+                currentSettings,
+              );
+            } catch (cardErr) {
+              console.error("Failed to draw card:", card.name, cardErr);
+              failedCards.push(card.name);
+
+              // Draw a fallback "ERROR" box so the user sees it on the PDF
+              try {
+                doc.setDrawColor(255, 0, 0);
+                doc.setLineWidth(0.5);
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = startX + col * (cardW + gap);
+                const y = startY + row * (cardH + gap);
+                doc.rect(x, y, cardW, cardH);
+                doc.setFontSize(10);
+                doc.setTextColor(255, 0, 0);
+                doc.text("RENDER FAIL", x + 5, y + 10);
+                doc.text(card.name.substring(0, 15), x + 5, y + 15);
+              } catch (drawErr) {
+                console.error("Could not even draw error box", drawErr);
+              }
+            }
 
             // Update Progress Bar
             totalProcessed++;
-            const pct = Math.round((totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) * 100);
+            const pct = Math.round(
+              (totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) *
+                100,
+            );
             this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
-            
-            // The "Breathe" Pause
-            if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+
+            // OPTIMIZED BREATHE REVERTED:
+            // Back to 5. Large decks need more breathing room for the main thread/GC.
+            if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
           }
 
           // Draw Backs (Duplex)
@@ -2402,29 +2801,49 @@ async generatePDF() {
 
             for (let i = 0; i < batch.length; i++) {
               const card = batch[i];
-              const col = i % cols;
-              const row = Math.floor(i / cols);
-              const mirroredCol = cols - 1 - col;
-              const x = startX + mirroredCol * (cardW + gap);
-              const y = startY + row * (cardH + gap);
+              try {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const mirroredCol = cols - 1 - col;
+                const x = startX + mirroredCol * (cardW + gap);
+                const y = startY + row * (cardH + gap);
 
-              if (card.backSrc) {
-                await this.drawCardToPDF(
-                  doc,
-                  ctx,
-                  card.backSrc,
-                  x,
-                  y,
-                  cardW,
-                  cardH,
-                  canvas,
+                if (card.backSrc) {
+                  await this.drawCardToPDF(
+                    doc,
+                    ctx,
+                    card.backSrc,
+                    x,
+                    y,
+                    cardW,
+                    cardH,
+                    canvas,
+                    currentSettings,
+                  );
+                  this.drawCutGuides(
+                    doc,
+                    x,
+                    y,
+                    cardW,
+                    cardH,
+                    gap,
+                    mirroredCol,
+                    row,
+                    cols,
+                    rows,
+                    currentSettings,
+                  );
+                }
+              } catch (backErr) {
+                console.error(
+                  "Failed to draw back for card:",
+                  card.name,
+                  backErr,
                 );
-                this.drawCutGuides(doc, x, y, cardW, cardH, gap, mirroredCol, row, cols, rows);
               }
-              
+
               // Update Progress Bar for Backs too
-              // (We don't increment totalProcessed strictly here to keep math simple, but we pause)
-              if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+              if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
             }
           }
         }
@@ -2435,7 +2854,7 @@ async generatePDF() {
           if (emptyPages.has(i)) continue;
           doc.setPage(i);
           doc.setFontSize(8);
-          doc.setTextColor(this.settings.pageBg === "black" ? 100 : 150);
+          doc.setTextColor(currentSettings.pageBg === "black" ? 100 : 150);
           doc.text(
             "Images via Scryfall. Proxy tool for personal playtesting only.",
             10,
@@ -2444,33 +2863,51 @@ async generatePDF() {
         }
 
         this.statusMessage = "Finalizing PDF file...";
-        await new Promise(r => setTimeout(r, 10)); // One last breath
+        await new Promise((r) => setTimeout(r, 10)); // One last breath
         doc.save(`proxies-${printQueue.length}-cards.pdf`);
-        
-        this.statusMessage = "PDF Downloaded!";
-        setTimeout(() => (this.statusMessage = ""), 5000);
 
+        if (failedCards.length > 0) {
+          this.errorMessage = `Generated with ${failedCards.length} errors: ${failedCards.slice(0, 3).join(", ")}${failedCards.length > 3 ? "..." : ""}`;
+          this.statusMessage = "";
+        } else {
+          this.statusMessage = "PDF Downloaded Successfully!";
+          setTimeout(() => (this.statusMessage = ""), 5000);
+        }
       } catch (e) {
         console.error(e);
-        this.errorMessage = "Failed to generate PDF. Try fewer cards at once.";
+        this.errorMessage = `Failed to generate PDF. Error: ${e.message || e}`;
         this.statusMessage = "";
       } finally {
         this.isGenerating = false;
+        // Resume prefetch if it was interrupted by PDF generation
+        this.runPrefetch();
       }
     },
 
-    drawCutGuides(doc, x, y, w, h, gap, col, row, maxCols, maxRows) {
-      if (this.settings.cutMarks === "none") return;
+    drawCutGuides(
+      doc,
+      x,
+      y,
+      w,
+      h,
+      gap,
+      col,
+      row,
+      maxCols,
+      maxRows,
+      settings = this.settings,
+    ) {
+      if (settings.cutMarks === "none") return;
 
-      const isDark = this.settings.pageBg === "black";
+      const isDark = settings.pageBg === "black";
       const color = isDark ? 255 : 150;
       doc.setDrawColor(color);
       doc.setLineWidth(0.1);
 
-      if (this.settings.cutMarks === "dotted") doc.setLineDash([1, 1], 0);
+      if (settings.cutMarks === "dotted") doc.setLineDash([1, 1], 0);
       else doc.setLineDash([], 0);
 
-      if (this.settings.cutMarks === "crosshairs") {
+      if (settings.cutMarks === "crosshairs") {
         const len = 3;
         // Draw L-shapes at corners
         doc.line(x - gap / 2, y, x - gap / 2 - len, y);
@@ -2487,20 +2924,27 @@ async generatePDF() {
       }
     },
 
-    async drawCardToPDF(doc, ctx, src, x, y, w, h, canvas) {
+    async drawCardToPDF(
+      doc,
+      ctx,
+      src,
+      x,
+      y,
+      w,
+      h,
+      canvas,
+      settings = this.settings,
+    ) {
       try {
-        const bleed = this.settings.bleedMm || 0;
-
-        // Initialize processed data cache
-        if (!this._processedImgCache) this._processedImgCache = new Map();
+        const bleed = settings.bleedMm || 0;
 
         // Create a unique key based on visual settings
-        const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+        const cacheKey = `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}`;
 
-        // Check if we have already processed this exact card image
-        let croppedData = this._processedImgCache.get(cacheKey);
+        // Check IDB Cache
+        let croppedData = await this.getFromCache(cacheKey);
 
-        // If not in cache, draw and process it
+        // If not in cache, draw and process it (Fallback for whatever reason)
         if (!croppedData) {
           const imgObj = await this.loadImage(src);
 
@@ -2509,7 +2953,7 @@ async generatePDF() {
 
           // Clear and Fill
           ctx.clearRect(0, 0, canvasW, canvasH);
-          ctx.fillStyle = this.settings.pageBg;
+          ctx.fillStyle = settings.pageBg;
           ctx.fillRect(0, 0, canvasW, canvasH);
 
           // Calculate scaling
@@ -2541,18 +2985,18 @@ async generatePDF() {
           );
 
           // Overlay Proxy Marker
-          if (this.settings.proxyMarker) {
+          if (settings.proxyMarker) {
             ctx.font = `bold ${canvasH * 0.025}px Arial`;
             ctx.fillStyle = "rgba(255,255,255,0.8)";
             ctx.textAlign = "center";
             ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
           }
 
-          // Compress to JPEG (0.9 is faster and sufficient for print)
-          croppedData = canvas.toDataURL("image/jpeg", 0.9);
+          // Compress to JPEG (0.85 matches prefetch)
+          croppedData = canvas.toDataURL("image/jpeg", 0.85);
 
           // Save to cache
-          this._processedImgCache.set(cacheKey, croppedData);
+          await this.saveToCache(cacheKey, croppedData);
         }
 
         // Add the (potentially cached) image data to PDF
@@ -2573,6 +3017,34 @@ async generatePDF() {
         doc.setTextColor(255, 0, 0);
         doc.text("Img Error", x + 2, y + 5);
       }
+    },
+    async checkStorageUsage() {
+      if (navigator.storage && navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        const usage = estimate.usage || 0;
+        if (usage > 1024 * 1024 * 1024) {
+          this.storageUsage = (usage / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+        } else {
+          this.storageUsage = (usage / (1024 * 1024)).toFixed(2) + " MB";
+        }
+      } else {
+        this.storageUsage = "Unknown";
+      }
+    },
+    async clearStorage() {
+      if (
+        !confirm(
+          "Are you sure you want to clear the image cache? This will not delete your deck list, but images will need to be re-downloaded.",
+        )
+      )
+        return;
+
+      await this.clearCacheDB();
+      if (this._processedImgCache) this._processedImgCache.clear();
+
+      await this.checkStorageUsage();
+      this.statusMessage = "Image cache cleared.";
+      setTimeout(() => (this.statusMessage = ""), 3000);
     },
   },
 }).mount("#app");
