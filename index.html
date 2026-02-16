@@ -158,7 +158,7 @@
             </button>
 
             <!-- Sorting Dropdown -->
-            <div class="relative z-30">
+            <div class="relative">
               <button
                 @click="showSortMenu = !showSortMenu"
                 :disabled="isGenerating"
@@ -176,13 +176,13 @@
               <!-- Click Outside Overlay -->
               <div
                 v-if="showSortMenu"
-                class="fixed inset-0 z-30 cursor-default"
+                class="fixed inset-0 z-20 cursor-default"
                 @click="showSortMenu = false"
               ></div>
               <!-- Sort Menu Items -->
               <div
                 v-if="showSortMenu"
-                class="absolute top-full left-0 mt-1 w-48 bg-surface rounded-lg shadow-xl border border-gray-100 z-40 overflow-hidden"
+                class="absolute top-full left-0 mt-1 w-48 bg-surface rounded-lg shadow-xl border border-gray-100 z-30 overflow-hidden"
               >
                 <button
                   @click="sortCards('auto')"
@@ -339,7 +339,7 @@
       >
         <div
           v-if="isDraggingFile && !showVersionModal"
-          class="fixed inset-0 z-50 bg-blue-500 bg-opacity-10 backdrop-blur-sm border-4 border-blue-400 border-dashed m-4 rounded-xl flex items-center justify-center pointer-events-none"
+          class="fixed inset-0 z-40 bg-blue-500 bg-opacity-10 backdrop-blur-sm border-4 border-blue-400 border-dashed m-4 rounded-xl flex items-center justify-center pointer-events-none"
         >
           <div
             class="bg-surface p-8 rounded-2xl shadow-xl flex flex-col items-center animate-bounce"
@@ -456,7 +456,7 @@
                     crossorigin="anonymous"
                     @error="handleImageError($event, card)"
                   />
-                  <div class="absolute top-2 left-2 z-20" @click.stop>
+                  <div class="absolute top-2 left-2 z-10" @click.stop>
                     <input
                       type="checkbox"
                       v-model="card.selected"
@@ -658,7 +658,7 @@
       >
         <div
           v-if="selectedCount > 0"
-          class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-surface rounded-full shadow-2xl border border-line px-6 py-3 flex items-center gap-4 z-40 whitespace-nowrap overflow-visible"
+          class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-surface rounded-full shadow-2xl border border-line px-6 py-3 flex items-center gap-4 z-30 whitespace-nowrap overflow-visible"
         >
           <span class="font-bold text-primary dark:text-white whitespace-nowrap"
             >{{ selectedCount }} selected</span
@@ -695,7 +695,7 @@
               Set Language
             </button>
             <div
-              class="absolute bottom-full left-0 mb-0 pb-4 w-32 hidden group-hover:block z-50"
+              class="absolute bottom-full left-0 mb-0 pb-4 w-32 hidden group-hover:block z-10"
             >
               <div
                 class="bg-surface rounded-lg shadow-xl border border-gray-100 dark:border-gray-600 overflow-hidden"
@@ -878,7 +878,7 @@
       <!-- Prefetch Status Indicator -->
       <div
         v-if="prefetchTotal > 0 && prefetchCurrent < prefetchTotal"
-        class="fixed bottom-4 right-4 bg-surface border border-line p-3 rounded-lg shadow-xl flex items-center gap-3 z-50 animate-bounce-in"
+        class="fixed bottom-4 right-4 bg-surface border border-line p-3 rounded-lg shadow-xl flex items-center gap-3 z-30 animate-bounce-in"
       >
         <div
           class="h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"
