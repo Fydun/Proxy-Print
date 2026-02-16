@@ -20,15 +20,11 @@
 
     <script>
       // 1. Check LocalStorage instantly
-      // 2. If nothing found, check System Preference
-      if (
-        localStorage.getItem("darkMode") === "true" ||
-        (!("darkMode" in localStorage) &&
-          window.matchMedia("(prefers-color-scheme: dark)").matches)
-      ) {
-        document.documentElement.classList.add("dark");
-      } else {
+      // 2. If nothing found, default to dark mode
+      if (localStorage.getItem("darkMode") === "false") {
         document.documentElement.classList.remove("dark");
+      } else {
+        document.documentElement.classList.add("dark");
       }
     </script>
 
