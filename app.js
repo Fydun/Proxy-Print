@@ -2266,9 +2266,13 @@ createApp({
 
       // 1. If we passed a Card object, update it persistently
       if (item && typeof item === "object") {
-        if (item.src && srcToCheck.includes(item.src)) {
+        if (item.smallSrc && srcToCheck.includes(item.smallSrc.split("?")[0])) {
+          item.smallSrc = fixUrl(item.smallSrc);
+        } else if (item.smallBackSrc && srcToCheck.includes(item.smallBackSrc.split("?")[0])) {
+          item.smallBackSrc = fixUrl(item.smallBackSrc);
+        } else if (item.src && srcToCheck.includes(item.src.split("?")[0])) {
           item.src = fixUrl(item.src);
-        } else if (item.backSrc && srcToCheck.includes(item.backSrc)) {
+        } else if (item.backSrc && srcToCheck.includes(item.backSrc.split("?")[0])) {
           item.backSrc = fixUrl(item.backSrc);
         }
         // Force save so the fix remembers next reload
@@ -2593,11 +2597,40 @@ createApp({
         if (c.backSrc) queue.add(c.backSrc);
       });
 
-      const tasks = Array.from(queue);
-      this.prefetchTotal = tasks.length;
+      const allSources = Array.from(queue);
+      const bleed = this.settings.bleedMm || 0;
+
+      // 3. Pre-check which images are already cached (fast IDB lookups)
+      const uncached = [];
+      let alreadyCached = 0;
+      for (const src of allSources) {
+        if (this.prefetchRunId !== currentRunId) return;
+        const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+        try {
+          const exists = await this.getFromCache(cacheKey);
+          if (exists) {
+            alreadyCached++;
+          } else {
+            uncached.push(src);
+          }
+        } catch {
+          uncached.push(src);
+        }
+      }
+
+      // If everything is already cached, no work to do — don't show the indicator
+      if (uncached.length === 0) {
+        this.prefetchTotal = 0;
+        this.prefetchCurrent = 0;
+        return;
+      }
+
+      // Only show progress for images that actually need processing
+      this.prefetchTotal = uncached.length;
       this.prefetchCurrent = 0;
 
-      const BATCH_SIZE = 4; // Process N images at a time to be faster
+      const tasks = uncached.slice(); // Copy so splice doesn't affect original
+      const BATCH_SIZE = 4;
 
       const processBatch = async () => {
         // Stop if a new run has started
