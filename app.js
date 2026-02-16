@@ -513,14 +513,51 @@ createApp({
 
       for (const card of eligibleCards) {
 
+        // FAST PATH: Restore instantly from cached language snapshot
+        if (!card.langCache) card.langCache = {};
+        if (targetLang in card.langCache) {
+          const cached = card.langCache[targetLang];
+          // null means we already know this language is unavailable — skip
+          if (cached === null) {
+            failedCount++;
+            this.langChangeCurrent++;
+            continue;
+          }
+          // Snapshot current language before overwriting
+          card.langCache[card.lang] = {
+            src: card.src,
+            smallSrc: card.smallSrc,
+            backSrc: card.backSrc,
+            smallBackSrc: card.smallBackSrc,
+            set: card.set,
+            cn: card.cn,
+            dfcData: card.dfcData ? { ...card.dfcData } : null,
+          };
+          card.src = cached.src;
+          card.smallSrc = cached.smallSrc;
+          card.backSrc = cached.backSrc || null;
+          card.smallBackSrc = cached.smallBackSrc || null;
+          card.set = cached.set;
+          card.cn = cached.cn;
+          card.dfcData = cached.dfcData || null;
+          card.lang = targetLang;
+          updatedCount++;
+          this.langChangeCurrent++;
+          continue;
+        }
+
         try {
           let newData = null;
 
           // STRATEGY 1: Try to get the EXACT same printing in the new language
           // Endpoint: /cards/:set/:cn/:lang
-          if (card.set && card.cn) {
+          // Use the English (original) set/cn for lookup if available
+          const enSnapshot = card.langCache['en'];
+          const lookupSet = (enSnapshot?.set || card.set).toLowerCase();
+          const lookupCn = enSnapshot?.cn || card.cn;
+          if (lookupSet && lookupCn) {
             const exactRes = await fetch(
-              `https://api.scryfall.com/cards/${card.set}/${card.cn}/${targetLang}`,
+              `https://api.scryfall.com/cards/${lookupSet}/${lookupCn}/${targetLang}`,
             );
             if (exactRes.ok) {
               const exactData = await exactRes.json();
@@ -559,6 +596,17 @@ createApp({
 
           // APPLY UPDATES
           if (newData) {
+            // Snapshot current language data before overwriting
+            card.langCache[card.lang] = {
+              src: card.src,
+              smallSrc: card.smallSrc,
+              backSrc: card.backSrc,
+              smallBackSrc: card.smallBackSrc,
+              set: card.set,
+              cn: card.cn,
+              dfcData: card.dfcData ? { ...card.dfcData } : null,
+            };
+
             card.src = getImg(newData);
 
             // Update preview thumbnails
@@ -591,8 +639,21 @@ createApp({
             // Optional: Update artist/frame data if you use them for sorting
             if (newData.artist) card.artist = newData.artist;
 
+            // Also cache the newly fetched language
+            card.langCache[targetLang] = {
+              src: card.src,
+              smallSrc: card.smallSrc,
+              backSrc: card.backSrc,
+              smallBackSrc: card.smallBackSrc,
+              set: card.set,
+              cn: card.cn,
+              dfcData: card.dfcData ? { ...card.dfcData } : null,
+            };
+
             updatedCount++;
           } else {
+            // Mark this language as known-unavailable so we skip it next time
+            card.langCache[targetLang] = null;
             failedCount++;
           }
         } catch (e) {
