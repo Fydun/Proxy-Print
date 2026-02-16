@@ -892,6 +892,25 @@
           >
         </div>
       </div>
+
+      <!-- Language Change Progress Indicator -->
+      <div
+        v-if="langChangeTotal > 0 && langChangeCurrent < langChangeTotal"
+        class="fixed bottom-4 right-4 bg-surface border border-line p-3 rounded-lg shadow-xl flex items-center gap-3 z-30 animate-bounce-in"
+        :class="{'bottom-20': prefetchTotal > 0 && prefetchCurrent < prefetchTotal}"
+      >
+        <div
+          class="h-4 w-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"
+        ></div>
+        <div class="flex flex-col">
+          <span class="text-xs font-bold text-primary"
+            >Changing Language</span
+          >
+          <span class="text-[10px] text-muted"
+            >{{ langChangeCurrent }} / {{ langChangeTotal }}</span
+          >
+        </div>
+      </div>
     </div>
 
     <!-- ================================================================== -->

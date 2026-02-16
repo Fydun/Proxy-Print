@@ -132,6 +132,8 @@ createApp({
       // Prefetch State
       prefetchTotal: 0,
       prefetchCurrent: 0,
+      langChangeTotal: 0,
+      langChangeCurrent: 0,
       prefetchRunId: 0,
     };
   },
@@ -482,8 +484,11 @@ createApp({
       const selectedCards = this.cards.filter((c) => c.selected);
       if (selectedCards.length === 0) return;
 
-      this.statusMessage = `Fetching ${targetLang.toUpperCase()} images for ${selectedCards.length} card(s)...`;
       let updatedCount = 0;
+      const eligibleCards = selectedCards.filter(c => c.set !== "Local" && c.lang !== targetLang);
+      this.langChangeTotal = eligibleCards.length;
+      this.langChangeCurrent = 0;
+      if (eligibleCards.length === 0) return;
 
       // Helper to extract image URI safely
       const getImg = (cData) => {
@@ -505,9 +510,7 @@ createApp({
         return null;
       };
 
-      for (const card of selectedCards) {
-        // Skip local files or if language is already set
-        if (card.set === "Local" || card.lang === targetLang) continue;
+      for (const card of eligibleCards) {
 
         try {
           let newData = null;
@@ -593,10 +596,14 @@ createApp({
           console.error(`Failed to translate ${card.name}`, e);
         }
 
+        this.langChangeCurrent++;
+
         // Small delay to respect Scryfall rate limits (75ms)
         await new Promise((r) => setTimeout(r, 75));
       }
 
+      this.langChangeTotal = 0;
+      this.langChangeCurrent = 0;
       this.saveSession();
       this.loadLocalImages();
       this.statusMessage = `Updated ${updatedCount} cards to ${targetLang.toUpperCase()}.`;
