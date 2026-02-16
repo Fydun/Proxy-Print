@@ -57,7 +57,7 @@ export default {
                 class="absolute bg-gray-100 overflow-hidden border border-gray-200"
                 :style="{ left: item.x + 'px', top: item.y + 'px', width: item.w + 'px', height: item.h + 'px' }"
               >
-                <img :src="item.src" class="w-full h-full object-cover" />
+                <img :src="item.src" loading="lazy" decoding="async" class="w-full h-full object-cover" />
               </div>
             </div>
           </div>

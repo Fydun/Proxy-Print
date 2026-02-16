@@ -2409,8 +2409,8 @@ createApp({
         this.cards.forEach((card) => {
           for (let i = 0; i < card.qty; i++) {
             printQueue.push({
-              src: card.src,
-              backSrc: card.backSrc,
+              src: card.smallSrc || card.src,
+              backSrc: card.smallBackSrc || card.backSrc,
               name: card.name,
             });
           }
@@ -2432,7 +2432,7 @@ createApp({
             const x = startX + col * (cardW + gap);
             const y = startY + row * (cardH + gap);
             pageItems.push({
-              i: i,
+              i,
               src: card.src,
               x: x * pxFactor,
               y: y * pxFactor,
@@ -2452,7 +2452,7 @@ createApp({
                 const x = startX + mirroredCol * (cardW + gap);
                 const y = startY + row * (cardH + gap);
                 backItems.push({
-                  i: i,
+                  i,
                   src: card.backSrc,
                   x: x * pxFactor,
                   y: y * pxFactor,
