@@ -124,6 +124,7 @@ createApp({
       sortState: { key: "", order: "asc" },
       previewPages: [],
       backdropInteract: false,
+      storageUsage: "",
     };
   },
   computed: {
@@ -271,6 +272,9 @@ createApp({
         this.runPrefetch();
       },
       deep: true,
+    },
+    showHelpModal(val) {
+      if (val) this.checkStorageUsage();
     },
   },
   async mounted() {
@@ -2763,6 +2767,34 @@ createApp({
         doc.setTextColor(255, 0, 0);
         doc.text("Img Error", x + 2, y + 5);
       }
+    },
+    async checkStorageUsage() {
+      if (navigator.storage && navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        const usage = estimate.usage || 0;
+        if (usage > 1024 * 1024 * 1024) {
+          this.storageUsage = (usage / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+        } else {
+          this.storageUsage = (usage / (1024 * 1024)).toFixed(2) + " MB";
+        }
+      } else {
+        this.storageUsage = "Unknown";
+      }
+    },
+    async clearStorage() {
+      if (
+        !confirm(
+          "Are you sure you want to clear the image cache? This will not delete your deck list, but images will need to be re-downloaded.",
+        )
+      )
+        return;
+
+      await this.clearCacheDB();
+      if (this._processedImgCache) this._processedImgCache.clear();
+
+      await this.checkStorageUsage();
+      this.statusMessage = "Image cache cleared.";
+      setTimeout(() => (this.statusMessage = ""), 3000);
     },
   },
 }).mount("#app");

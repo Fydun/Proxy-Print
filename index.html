@@ -852,7 +852,11 @@
 
       <!-- 5. Show Help Modal -->
 
-      <help-modal v-model="showHelpModal"></help-modal>
+      <help-modal
+        v-model="showHelpModal"
+        :storage-usage="storageUsage"
+        @clear-storage="clearStorage"
+      ></help-modal>
 
       <!-- Hidden Canvas for Processing -->
       <canvas ref="procCanvas" class="hidden"></canvas>

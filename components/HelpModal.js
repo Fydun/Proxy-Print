@@ -2,8 +2,8 @@ import AppIcon from "./AppIcon.js";
 
 export default {
   components: { AppIcon },
-  props: ["modelValue"],
-  emits: ["update:modelValue"],
+  props: ["modelValue", "storageUsage"],
+  emits: ["update:modelValue", "clear-storage"],
   data() {
     return { backdropInteract: false };
   },
@@ -56,7 +56,7 @@ export default {
                 <li><strong>Change Version:</strong> Click any card to swap art/set or language.</li>
                 <li><strong>Custom Art:</strong> In the version selector, click "Upload" or drag an image onto the modal.</li>
                 <li><strong>Mass Edit:</strong> Use the "Select All" checkbox or click checkboxes on cards to change language or delete in bulk.</li>
-                <li><strong>DFC Support:</strong> Print different amount of front and backsides, from diffeent sets, or use the Duplex option for double-sided printing.</li>
+                <li><strong>DFC Support:</strong> Print a different number of front and back sides, from different sets, or use the Duplex option for double-sided printing.</li>
 
               </ul>
             </div>
@@ -70,9 +70,23 @@ export default {
               </ul>
             </div>
             
-            <div class="mt-6 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-100 dark:border-gray-600 text-xs text-gray-500 dark:text-gray-400">
+            <div class="mt-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-100 dark:border-gray-600 text-xs text-gray-500 dark:text-gray-400">
               <p class="font-semibold mb-1">Privacy & Data Storage</p>
-              <p>This application runs entirely in your browser. Your deck lists and custom images are stored on your device using IndexedDB. User settings are saved via LocalStorage. No data is transmitted to, processed by, or stored on any external server.</p>
+              <p class="mb-3">This application runs entirely in your browser. Your deck lists and custom images are stored on your device using IndexedDB. User settings are saved via LocalStorage. No data is transmitted to, processed by, or stored on any external server.</p>
+              
+              <div class="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-600">
+                <div class="flex flex-col">
+                   <span class="font-bold text-gray-700 dark:text-gray-300">Storage Used</span>
+                   <span>{{ storageUsage || 'Calculated on open...' }}</span>
+                </div>
+                <button 
+                  @click="$emit('clear-storage')" 
+                  class="px-3 py-1.5 bg-white dark:bg-gray-600 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded font-bold transition-colors text-xs flex items-center gap-1"
+                >
+                  <app-icon name="trash" class="h-3 w-3"></app-icon>
+                  Clear Cache
+                </button>
+              </div>
             </div>
           </div>
 
