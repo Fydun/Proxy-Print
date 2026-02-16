@@ -115,7 +115,7 @@ createApp({
         pageBg: "white",
         bleedMm: 0,
         proxyMarker: false,
-        darkMode: false,
+        darkMode: true,
       },
 
       // Cache & Preferences
