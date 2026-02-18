@@ -83,11 +83,11 @@ export default {
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <label class="block text-xs font-medium text-muted mb-1">Width (mm)</label>
-                  <input type="number" v-model.number="settings.cardWidth" :disabled="settings.cardPreset !== 'custom'" class="w-full border border-line rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-surface text-primary disabled:bg-gray-100 disabled:text-gray-400" />
+                  <input type="number" v-model.number="settings.cardWidth" :disabled="settings.cardPreset !== 'custom'" class="w-full border border-line rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-surface text-primary disabled:bg-gray-100 disabled:text-gray-400 dark:disabled:bg-gray-700 dark:disabled:text-gray-400 dark:disabled:border-gray-700 dark:disabled:opacity-80" />
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-muted mb-1">Height (mm)</label>
-                  <input type="number" v-model.number="settings.cardHeight" :disabled="settings.cardPreset !== 'custom'" class="w-full border border-line rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-surface text-primary disabled:bg-gray-100 disabled:text-gray-400" />
+                  <input type="number" v-model.number="settings.cardHeight" :disabled="settings.cardPreset !== 'custom'" class="w-full border border-line rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-surface text-primary disabled:bg-gray-100 disabled:text-gray-400 dark:disabled:bg-gray-700 dark:disabled:text-gray-400 dark:disabled:border-gray-700 dark:disabled:opacity-80" />
                 </div>
               </div>
             </div>
