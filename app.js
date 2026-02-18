@@ -16,38 +16,47 @@ const PAPER_SIZES = {
   letter: { w: 215.9, h: 279.4 },
 };
 
-// --- HELPER: IndexedDB Persistence ---
-const saveToDB = (data) => {
+// --- HELPER: IndexedDB Persistence (cached connection) ---
+let _sessionDB = null;
+const getSessionDB = () => {
+  if (_sessionDB) {
+    try { _sessionDB.objectStoreNames; return Promise.resolve(_sessionDB); } catch { _sessionDB = null; }
+  }
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onupgradeneeded = (e) => {
       e.target.result.createObjectStore(STORE_NAME);
     };
-    request.onsuccess = (e) => {
-      const db = e.target.result;
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      tx.objectStore(STORE_NAME).put(data, "currentSession");
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
+    request.onsuccess = (e) => { _sessionDB = e.target.result; resolve(_sessionDB); };
     request.onerror = () => reject(request.error);
   });
 };
-const loadFromDB = () => {
+const saveToDB = async (data) => {
+  const db = await getSessionDB();
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = (e) => {
-      e.target.result.createObjectStore(STORE_NAME);
-    };
-    request.onsuccess = (e) => {
-      const db = e.target.result;
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const req = tx.objectStore(STORE_NAME).get("currentSession");
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    };
-    request.onerror = () => reject(request.error);
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put(data, "currentSession");
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
+};
+const loadFromDB = async () => {
+  const db = await getSessionDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).get("currentSession");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+};
+
+// --- HELPER: Debounce ---
+const debounce = (fn, ms) => {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
 };
 
 createApp({
@@ -348,7 +357,7 @@ createApp({
 
     /* --- Core & Persistence --- */
 
-    async saveSession() {
+    _saveSessionImmediate() {
       try {
         const rawData = {
           cards: this.cards,
@@ -358,11 +367,17 @@ createApp({
         };
 
         const data = JSON.parse(JSON.stringify(rawData));
-        await saveToDB(data);
+        saveToDB(data).catch((e) => console.warn("Storage issue", e));
       } catch (e) {
         console.warn("Storage issue", e);
       }
     },
+
+    // Debounced version — used by watchers and most callers.
+    // Batches rapid mutations (checkbox toggles, qty edits) into one write.
+    saveSession: debounce(function () {
+      this._saveSessionImmediate();
+    }, 500),
 
     async loadSession() {
       try {
@@ -511,34 +526,79 @@ createApp({
         return null;
       };
 
-      for (const card of eligibleCards) {
+      // Helper functions for applying Scryfall data to a card
+      const getSmallImg = (cData) => {
+        if (cData.card_faces && cData.card_faces[0].image_uris) {
+          return cData.card_faces[0].image_uris.small || cData.card_faces[0].image_uris.normal || getImg(cData);
+        }
+        return cData.image_uris?.small || cData.image_uris?.normal || getImg(cData);
+      };
+      const getSmallBackImg = (cData) => {
+        if (cData.card_faces && cData.card_faces[1]?.image_uris) {
+          return cData.card_faces[1].image_uris.small || cData.card_faces[1].image_uris.normal || getBackImg(cData);
+        }
+        return null;
+      };
 
-        // FAST PATH: Restore instantly from cached language snapshot
+      const snapshotCard = (card) => {
+        const currentLocalUrls = {};
+        [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
+          if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
+        });
+        return {
+          src: card.src,
+          smallSrc: card.smallSrc,
+          backSrc: card.backSrc,
+          smallBackSrc: card.smallBackSrc,
+          set: card.set,
+          cn: card.cn,
+          dfcData: card.dfcData ? { ...card.dfcData } : null,
+          localUrls: currentLocalUrls,
+        };
+      };
+
+      const applyCardData = (card, newData) => {
+        card.langCache[card.lang] = snapshotCard(card);
+
+        card.src = getImg(newData);
+        card.smallSrc = getSmallImg(newData);
+
+        const newBack = getBackImg(newData);
+        if (newBack) {
+          card.backSrc = newBack;
+          card.smallBackSrc = getSmallBackImg(newData);
+          card.dfcData = { frontSrc: card.src, backSrc: newBack };
+        }
+
+        card.set = newData.set.toUpperCase();
+        card.cn = newData.collector_number;
+        card.lang = targetLang;
+        if (newData.artist) card.artist = newData.artist;
+
+        card.langCache[targetLang] = {
+          src: card.src,
+          smallSrc: card.smallSrc,
+          backSrc: card.backSrc,
+          smallBackSrc: card.smallBackSrc,
+          set: card.set,
+          cn: card.cn,
+          dfcData: card.dfcData ? { ...card.dfcData } : null,
+          localUrls: {},
+        };
+      };
+
+      // --- Phase 1: Restore from cache (instant, no network) ---
+      const needsFetch = [];
+      for (const card of eligibleCards) {
         if (!card.langCache) card.langCache = {};
         if (targetLang in card.langCache) {
           const cached = card.langCache[targetLang];
-          // null means we already know this language is unavailable — skip
           if (cached === null) {
             failedCount++;
             this.langChangeCurrent++;
             continue;
           }
-          // Snapshot current language before overwriting (including local data URLs)
-          const currentLocalUrls = {};
-          [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
-            if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
-          });
-          card.langCache[card.lang] = {
-            src: card.src,
-            smallSrc: card.smallSrc,
-            backSrc: card.backSrc,
-            smallBackSrc: card.smallBackSrc,
-            set: card.set,
-            cn: card.cn,
-            dfcData: card.dfcData ? { ...card.dfcData } : null,
-            localUrls: currentLocalUrls,
-          };
-          // Restore cached data
+          card.langCache[card.lang] = snapshotCard(card);
           card.src = cached.src;
           card.smallSrc = cached.smallSrc;
           card.backSrc = cached.backSrc || null;
@@ -547,7 +607,6 @@ createApp({
           card.cn = cached.cn;
           card.dfcData = cached.dfcData || null;
           card.lang = targetLang;
-          // Re-inject cached local data URLs so resolveImage() returns them instantly
           if (cached.localUrls) {
             Object.assign(this.localImages, cached.localUrls);
           }
@@ -555,132 +614,134 @@ createApp({
           this.langChangeCurrent++;
           continue;
         }
+        needsFetch.push(card);
+      }
 
-        try {
-          let newData = null;
+      // --- Phase 2: Batch fetch from Scryfall using /cards/collection ---
+      if (needsFetch.length > 0) {
+        const BATCH_SIZE = 75;
+        for (let i = 0; i < needsFetch.length; i += BATCH_SIZE) {
+          const batch = needsFetch.slice(i, i + BATCH_SIZE);
 
-          // STRATEGY 1: Try to get the EXACT same printing in the new language
-          // Endpoint: /cards/:set/:cn/:lang
-          // Use the English (original) set/cn for lookup if available
-          const enSnapshot = card.langCache['en'];
-          const lookupSet = (enSnapshot?.set || card.set).toLowerCase();
-          const lookupCn = enSnapshot?.cn || card.cn;
-          if (lookupSet && lookupCn) {
-            const exactRes = await fetch(
-              `https://api.scryfall.com/cards/${lookupSet}/${lookupCn}/${targetLang}`,
+          // Build identifiers: use English set/cn for exact match in target language
+          const identifiers = batch.map((card) => {
+            const enSnapshot = card.langCache['en'];
+            const lookupSet = (enSnapshot?.set || card.set).toLowerCase();
+            const lookupCn = enSnapshot?.cn || card.cn;
+            return { set: lookupSet, collector_number: lookupCn };
+          });
+
+          try {
+            // Try exact printings in the target language via collection endpoint
+            const res = await fetch(
+              "https://api.scryfall.com/cards/collection",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ identifiers }),
+              },
             );
-            if (exactRes.ok) {
-              const exactData = await exactRes.json();
-              // Skip placeholders — Scryfall has no real scan
-              if (exactData.image_status !== 'placeholder') {
-                newData = exactData;
-              }
+            const data = await res.json();
+
+            // Build lookup map from results
+            const foundMap = new Map();
+            if (data.data) {
+              data.data.forEach((c) => {
+                const key = `${c.set.toLowerCase()}_${c.collector_number}`;
+                foundMap.set(key, c);
+              });
             }
+
+            // Apply results and identify cards that need individual fallback
+            const fallbackCards = [];
+            for (let j = 0; j < batch.length; j++) {
+              const card = batch[j];
+              const id = identifiers[j];
+              const key = `${id.set}_${id.collector_number}`;
+              let matchData = foundMap.get(key);
+
+              // Check if returned card is actually in the target language
+              if (matchData && matchData.lang !== targetLang) {
+                // Collection returns English by default — try the lang endpoint
+                try {
+                  const langRes = await fetch(
+                    `https://api.scryfall.com/cards/${id.set}/${id.collector_number}/${targetLang}`,
+                  );
+                  if (langRes.ok) {
+                    const langData = await langRes.json();
+                    if (langData.image_status !== 'placeholder') {
+                      matchData = langData;
+                    } else {
+                      matchData = null;
+                    }
+                  } else {
+                    matchData = null;
+                  }
+                  await new Promise((r) => setTimeout(r, 75));
+                } catch {
+                  matchData = null;
+                }
+              }
+
+              // Skip placeholders
+              if (matchData && matchData.image_status === 'placeholder') {
+                matchData = null;
+              }
+
+              if (matchData) {
+                applyCardData(card, matchData);
+                updatedCount++;
+              } else {
+                fallbackCards.push(card);
+              }
+              this.langChangeCurrent++;
+            }
+
+            // Fallback: for cards not found via exact match, try search
+            for (const card of fallbackCards) {
+              try {
+                let query = `lang:${targetLang} unique:prints`;
+                if (card.oracle_id) {
+                  query += ` oracle_id:${card.oracle_id}`;
+                } else {
+                  const cleanName = card.name
+                    .split(" // ")[0]
+                    .replace(/ \(.*?\)/g, "");
+                  query += ` !"${cleanName}"`;
+                }
+
+                const searchRes = await fetch(
+                  `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released`,
+                );
+                if (searchRes.ok) {
+                  const searchData = await searchRes.json();
+                  const match = searchData.data?.find(c => c.image_status !== 'placeholder') || null;
+                  if (match) {
+                    applyCardData(card, match);
+                    updatedCount++;
+                  } else {
+                    card.langCache[targetLang] = null;
+                    failedCount++;
+                  }
+                } else {
+                  card.langCache[targetLang] = null;
+                  failedCount++;
+                }
+              } catch (e) {
+                console.error(`Failed to translate ${card.name}`, e);
+                failedCount++;
+              }
+              await new Promise((r) => setTimeout(r, 75));
+            }
+          } catch (e) {
+            console.error("Batch language change error", e);
+            batch.forEach(() => failedCount++);
+            this.langChangeCurrent += batch.length;
           }
 
-          // STRATEGY 2: Fallback - specific print not found, find ANY print in this language
-          // Endpoint: /cards/search (using oracle_id if available, or name)
-          if (!newData) {
-            let query = `lang:${targetLang} unique:prints`;
-            if (card.oracle_id) {
-              query += ` oracle_id:${card.oracle_id}`;
-            } else {
-              // Remove existing language tags or split card names for search
-              const cleanName = card.name
-                .split(" // ")[0]
-                .replace(/ \(.*?\)/g, "");
-              query += ` !"${cleanName}"`;
-            }
-
-            const searchRes = await fetch(
-              `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released`,
-            );
-            if (searchRes.ok) {
-              const searchData = await searchRes.json();
-              // Take the first non-placeholder match
-              if (searchData.data && searchData.data.length > 0) {
-                newData = searchData.data.find(c => c.image_status !== 'placeholder') || null;
-              }
-            }
-          }
-
-          // APPLY UPDATES
-          if (newData) {
-            // Snapshot current language data before overwriting (including local data URLs)
-            const currentLocalUrls = {};
-            [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
-              if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
-            });
-            card.langCache[card.lang] = {
-              src: card.src,
-              smallSrc: card.smallSrc,
-              backSrc: card.backSrc,
-              smallBackSrc: card.smallBackSrc,
-              set: card.set,
-              cn: card.cn,
-              dfcData: card.dfcData ? { ...card.dfcData } : null,
-              localUrls: currentLocalUrls,
-            };
-
-            card.src = getImg(newData);
-
-            // Update preview thumbnails
-            const getSmallImg = (cData) => {
-              if (cData.card_faces && cData.card_faces[0].image_uris) {
-                return cData.card_faces[0].image_uris.small || cData.card_faces[0].image_uris.normal || getImg(cData);
-              }
-              return cData.image_uris?.small || cData.image_uris?.normal || getImg(cData);
-            };
-            const getSmallBackImg = (cData) => {
-              if (cData.card_faces && cData.card_faces[1]?.image_uris) {
-                return cData.card_faces[1].image_uris.small || cData.card_faces[1].image_uris.normal || getBackImg(cData);
-              }
-              return null;
-            };
-            card.smallSrc = getSmallImg(newData);
-
-            // Handle Back faces (DFC)
-            const newBack = getBackImg(newData);
-            if (newBack) {
-              card.backSrc = newBack;
-              card.smallBackSrc = getSmallBackImg(newData);
-              card.dfcData = { frontSrc: card.src, backSrc: newBack };
-            }
-
-            // Update Metadata so the UI reflects the actual version found
-            card.set = newData.set.toUpperCase();
-            card.cn = newData.collector_number;
-            card.lang = targetLang;
-            // Optional: Update artist/frame data if you use them for sorting
-            if (newData.artist) card.artist = newData.artist;
-
-            // Also cache the newly fetched language (localUrls populated later by loadLocalImages)
-            card.langCache[targetLang] = {
-              src: card.src,
-              smallSrc: card.smallSrc,
-              backSrc: card.backSrc,
-              smallBackSrc: card.smallBackSrc,
-              set: card.set,
-              cn: card.cn,
-              dfcData: card.dfcData ? { ...card.dfcData } : null,
-              localUrls: {},
-            };
-
-            updatedCount++;
-          } else {
-            // Mark this language as known-unavailable so we skip it next time
-            card.langCache[targetLang] = null;
-            failedCount++;
-          }
-        } catch (e) {
-          console.error(`Failed to translate ${card.name}`, e);
-          failedCount++;
+          // Delay between batches
+          await new Promise((r) => setTimeout(r, 100));
         }
-
-        this.langChangeCurrent++;
-
-        // Small delay to respect Scryfall rate limits (75ms)
-        await new Promise((r) => setTimeout(r, 75));
       }
 
       this.langChangeTotal = 0;
@@ -2641,6 +2702,29 @@ createApp({
       });
     },
 
+    // Batch read: fetch many keys in a single IDB transaction
+    async getBatchFromCache(keys) {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readonly");
+        const store = tx.objectStore("images");
+        const results = new Map();
+        let pending = keys.length;
+        if (pending === 0) return resolve(results);
+        for (const key of keys) {
+          const req = store.get(key);
+          req.onsuccess = () => {
+            if (req.result) results.set(key, req.result);
+            if (--pending === 0) resolve(results);
+          };
+          req.onerror = () => {
+            if (--pending === 0) resolve(results);
+          };
+        }
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+
     async clearCacheDB() {
       const db = await this.initCacheDB();
       return new Promise((resolve, reject) => {
@@ -3014,7 +3098,17 @@ createApp({
           // Yield every batch to let the UI update and GC run
           await new Promise((r) => setTimeout(r, 0));
 
-          // Draw Fronts
+          // Pre-resolve all front images in parallel (utilizes full worker pool)
+          const frontImageData = await this.resolveCardImages(
+            batch.map((c) => c.src),
+            cardW,
+            cardH,
+            canvas,
+            ctx,
+            currentSettings,
+          );
+
+          // Draw Fronts (sequential write to PDF using pre-resolved data)
           for (let i = 0; i < batch.length; i++) {
             const card = batch[i];
 
@@ -3023,18 +3117,21 @@ createApp({
               const row = Math.floor(i / cols);
               const x = startX + col * (cardW + gap);
               const y = startY + row * (cardH + gap);
+              const bleed = currentSettings.bleedMm || 0;
 
-              await this.drawCardToPDF(
-                doc,
-                ctx,
-                card.src,
-                x,
-                y,
-                cardW,
-                cardH,
-                canvas,
-                currentSettings,
-              );
+              if (frontImageData[i]) {
+                doc.addImage(
+                  frontImageData[i],
+                  "JPEG",
+                  x - bleed,
+                  y - bleed,
+                  cardW + bleed * 2,
+                  cardH + bleed * 2,
+                );
+              } else {
+                throw new Error("Image pre-resolve returned null");
+              }
+
               this.drawCutGuides(
                 doc,
                 x,
@@ -3077,11 +3174,10 @@ createApp({
                 100,
             );
             this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
-
-            // OPTIMIZED BREATHE REVERTED:
-            // Back to 5. Large decks need more breathing room for the main thread/GC.
-            if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
           }
+
+          // Breathe after each front page
+          await new Promise((r) => setTimeout(r, 0));
 
           // Draw Backs (Duplex)
           if (needsBackPage) {
@@ -3091,6 +3187,17 @@ createApp({
               emptyPages.add(doc.internal.getNumberOfPages());
             }
 
+            // Pre-resolve all back images in parallel
+            const backSrcs = batch.map((c) => c.backSrc || null);
+            const backImageData = await this.resolveCardImages(
+              backSrcs,
+              cardW,
+              cardH,
+              canvas,
+              ctx,
+              currentSettings,
+            );
+
             for (let i = 0; i < batch.length; i++) {
               const card = batch[i];
               try {
@@ -3099,18 +3206,16 @@ createApp({
                 const mirroredCol = cols - 1 - col;
                 const x = startX + mirroredCol * (cardW + gap);
                 const y = startY + row * (cardH + gap);
+                const bleed = currentSettings.bleedMm || 0;
 
-                if (card.backSrc) {
-                  await this.drawCardToPDF(
-                    doc,
-                    ctx,
-                    card.backSrc,
-                    x,
-                    y,
-                    cardW,
-                    cardH,
-                    canvas,
-                    currentSettings,
+                if (backImageData[i]) {
+                  doc.addImage(
+                    backImageData[i],
+                    "JPEG",
+                    x - bleed,
+                    y - bleed,
+                    cardW + bleed * 2,
+                    cardH + bleed * 2,
                   );
                   this.drawCutGuides(
                     doc,
@@ -3133,10 +3238,10 @@ createApp({
                   backErr,
                 );
               }
-
-              // Update Progress Bar for Backs too
-              if (i % 5 === 0) await new Promise((r) => setTimeout(r, 0));
             }
+
+            // Breathe after each back page
+            await new Promise((r) => setTimeout(r, 0));
           }
         }
 
@@ -3214,6 +3319,102 @@ createApp({
         // Standard box
         doc.rect(x, y, w, h);
       }
+    },
+
+    // Pre-resolve an array of image sources into processed data URLs in parallel.
+    // Uses the full worker pool for uncached images, then returns an array
+    // aligned with the input (null for sources that were null/failed).
+    async resolveCardImages(sources, cardW, cardH, canvas, ctx, settings) {
+      const bleed = settings.bleedMm || 0;
+      const scaleFactor = 12;
+
+      // 1. Batch-check IDB cache for all sources in one transaction
+      const cacheKeys = sources.map((src) =>
+        src ? `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}` : null,
+      );
+      const validKeys = cacheKeys.filter((k) => k !== null);
+      let cachedResults;
+      try {
+        cachedResults = await this.getBatchFromCache(validKeys);
+      } catch {
+        cachedResults = new Map();
+      }
+
+      // 2. Process all sources concurrently
+      const results = await Promise.all(
+        sources.map(async (src, i) => {
+          if (!src) return null;
+          try {
+            // Check cache first
+            const cached = cachedResults.get(cacheKeys[i]);
+            if (cached) return cached;
+
+            // Not cached — process the image
+            const imgObj = await this.loadImage(src);
+
+            if (this._useWorkers) {
+              const bitmap = await createImageBitmap(imgObj);
+              const result = await this.processCardWithWorker(bitmap, {
+                cardW,
+                cardH,
+                bleed,
+                pageBg: settings.pageBg,
+                proxyMarker: settings.proxyMarker,
+                scaleFactor,
+                cacheKey: cacheKeys[i],
+                checkCache: false,
+                returnData: true,
+              });
+              return result.dataUrl;
+            } else {
+              // Fallback: create a dedicated canvas per image (safe for concurrent calls)
+              const fallbackCanvas = document.createElement("canvas");
+              const fallbackCtx = fallbackCanvas.getContext("2d", { willReadFrequently: true });
+              const targetW = (cardW + bleed * 2) * scaleFactor;
+              const targetH = (cardH + bleed * 2) * scaleFactor;
+              fallbackCanvas.width = targetW;
+              fallbackCanvas.height = targetH;
+
+              fallbackCtx.clearRect(0, 0, targetW, targetH);
+              fallbackCtx.fillStyle = settings.pageBg;
+              fallbackCtx.fillRect(0, 0, targetW, targetH);
+
+              const targetRatio = cardW / cardH;
+              const imgRatio = imgObj.width / imgObj.height;
+              let sWidth, sHeight, sx, sy;
+              if (imgRatio > targetRatio) {
+                sHeight = imgObj.height;
+                sWidth = sHeight * targetRatio;
+                sy = 0;
+                sx = (imgObj.width - sWidth) / 2;
+              } else {
+                sWidth = imgObj.width;
+                sHeight = sWidth / targetRatio;
+                sx = 0;
+                sy = (imgObj.height - sHeight) / 2;
+              }
+
+              fallbackCtx.drawImage(imgObj, sx, sy, sWidth, sHeight, 0, 0, targetW, targetH);
+
+              if (settings.proxyMarker) {
+                fallbackCtx.font = `bold ${targetH * 0.025}px Arial`;
+                fallbackCtx.fillStyle = "rgba(255,255,255,0.8)";
+                fallbackCtx.textAlign = "center";
+                fallbackCtx.fillText("PROXY", targetW / 2, targetH - targetH * 0.035);
+              }
+
+              const croppedData = fallbackCanvas.toDataURL("image/jpeg", 0.85);
+              this.saveToCache(cacheKeys[i], croppedData).catch(() => {});
+              return croppedData;
+            }
+          } catch (err) {
+            console.warn("resolveCardImages failed for:", src, err);
+            return null;
+          }
+        }),
+      );
+
+      return results;
     },
 
     async drawCardToPDF(
@@ -3361,18 +3562,23 @@ createApp({
 
       if (urls.size === 0) return;
 
-      // Phase 1: Load from IndexedDB (instant, no network)
+      // Phase 1: Load from IndexedDB in a single batch transaction
+      const urlList = Array.from(urls);
+      const cacheKeys = urlList.map((u) => `thumb_${u}`);
+      let cachedResults;
+      try {
+        cachedResults = await this.getBatchFromCache(cacheKeys);
+      } catch {
+        cachedResults = new Map();
+      }
+
       const uncached = [];
-      for (const url of urls) {
-        const cacheKey = `thumb_${url}`;
-        try {
-          const cached = await this.getFromCache(cacheKey);
-          if (cached) {
-            this.localImages[url] = cached;
-          } else {
-            uncached.push(url);
-          }
-        } catch {
+      for (let i = 0; i < urlList.length; i++) {
+        const url = urlList[i];
+        const data = cachedResults.get(cacheKeys[i]);
+        if (data) {
+          this.localImages[url] = data;
+        } else {
           uncached.push(url);
         }
       }
