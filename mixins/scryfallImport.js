@@ -3,231 +3,186 @@
 
 export default {
   methods: {
+    /**
+     * Import a deck from a Moxfield URL.
+     *
+     * Strategy:
+     *   1. Extract deck ID from URL
+     *   2. Try Moxfield v3 API (api2.moxfield.com) through multiple CORS proxies
+     *   3. Fall back to v2 API (api.moxfield.com) through the same proxies
+     *   4. Parse the JSON and populate the import text area
+     *
+     * Moxfield's API does not set CORS headers, so we must relay through
+     * third-party CORS proxies. These are inherently best-effort; when all
+     * proxies fail the user is directed to paste the list manually.
+     */
     async importDeckFromURL() {
-      // IMMEDIATE LOG: Confirm function is running
-      console.log("--- IMPORT STARTING ---");
-      console.log("URL Input:", this.importUrl);
-
-      // 1. Basic Input Validation
-      if (!this.importUrl) {
-        console.warn("Import aborted: No URL provided");
-        return;
-      }
+      if (!this.importUrl) return;
 
       this.isFetchingUrl = true;
       this.errorMessage = "";
-      this.importStatus = "Starting trace... (Check Console)";
+      this.importStatus = "Fetching deck…";
 
       const url = this.importUrl.trim();
-      const startTime = Date.now();
-      const traceLog = [];
-
-      // Helper to log to both Console (Real-time) and TraceLog (History)
-      const log = (msg) => {
-        const time = ((Date.now() - startTime) / 1000).toFixed(2);
-        const fullMsg = `[${time}s] ${msg}`;
-        console.log(fullMsg);
-        traceLog.push(fullMsg);
-      };
 
       try {
-        // 2. Validate Moxfield Domain & Extract Deck ID
-        const moxfieldRegex = /moxfield\.com\/decks\/([a-zA-Z0-9\-_]+)/;
-        const match = url.match(moxfieldRegex);
-
-        if (!match) {
-          log("Regex failed: URL did not match expected Moxfield format.");
+        // --- 1. Extract Deck ID ---
+        const deckId = this._extractMoxfieldDeckId(url);
+        if (!deckId) {
           throw new Error(
-            "Invalid URL. Please enter a valid Moxfield deck link.",
+            "Invalid URL — paste a link like moxfield.com/decks/abc123",
           );
         }
 
-        const deckId = match[1];
-        log(`Deck ID extracted: ${deckId}`);
+        // --- 2. Fetch deck JSON via CORS proxies ---
+        const data = await this._fetchMoxfieldDeck(deckId);
 
-        // STRATEGY: "Strict Validation"
-        // We prioritize the API, then Main Page.
-        // We intentionally skip 'Embed' because it consistently returns empty shells via proxy.
-        // We rely on the Main Page's __NEXT_DATA__ blob which is robust even without JS.
-        const targets = [
-          {
-            name: "API",
-            url: `https://api.moxfield.com/v2/decks/all/${deckId}`,
-            format: "json",
-          },
-          {
-            name: "Main",
-            url: `https://www.moxfield.com/decks/${deckId}`,
-            format: "html",
-          },
-        ];
+        // --- 3. Parse card list from JSON ---
+        const lines = this._parseMoxfieldDeck(data);
 
-        // Define proxies with Cache Busting
-        const ts = Date.now();
-        const proxies = [
-          {
-            name: "CorsProxy",
-            gen: (t) =>
-              `https://corsproxy.io/?${encodeURIComponent(t)}&_t=${ts}`,
-          },
-          {
-            name: "AllOrigins",
-            gen: (t) =>
-              `https://api.allorigins.win/raw?url=${encodeURIComponent(t)}&timestamp=${ts}`,
-          },
-        ];
-
-        let responseText = null;
-        let successTarget = null;
-        let successProxy = null;
-
-        // 3. Attempt Fetch Loop
-        outerLoop: for (const target of targets) {
-          for (const proxy of proxies) {
-            const stepName = `${target.name} via ${proxy.name}`;
-            log(`Trying: ${stepName}`);
-
-            try {
-              // Timeout Controller (20s max - Main page can be slow)
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-              const res = await fetch(proxy.gen(target.url), {
-                signal: controller.signal,
-              });
-              clearTimeout(timeoutId);
-
-              if (res.status === 404) {
-                log(`   -> Failed: Status 404 (Page not found).`);
-                continue;
-              }
-
-              if (res.ok) {
-                const text = await res.text();
-
-                // Validation: Check for Soft 404s or Block pages
-                if (
-                  text.includes('"status":404') ||
-                  text.includes('"title":"Not Found"') ||
-                  text.includes("Just a moment...") ||
-                  text.includes("Cloudflare")
-                ) {
-                  log("   -> Failed: Soft 404 or Cloudflare Block");
-                  continue;
-                }
-
-                // STRICT VALIDATION:
-                // We do NOT accept a page just because it downloaded.
-                // It MUST contain the data markers.
-                let isValid = false;
-
-                if (target.format === "json") {
-                  if (text.startsWith("{")) isValid = true;
-                } else if (target.name === "Main") {
-                  // The Main page MUST contain the Next.js hydration blob
-                  if (text.includes("__NEXT_DATA__")) {
-                    isValid = true;
-                  } else {
-                    log(
-                      "   -> Failed: Page downloaded but missing __NEXT_DATA__ blob (Empty Shell)",
-                    );
-                  }
-                }
-
-                if (isValid) {
-                  responseText = text;
-                  successTarget = target;
-                  successProxy = proxy.name;
-                  log("   -> SUCCESS: Valid Data Found");
-                  break outerLoop;
-                }
-              } else {
-                log(`   -> Failed: Status ${res.status}`);
-              }
-            } catch (err) {
-              log(
-                `   -> Error: ${err.name === "AbortError" ? "Timeout" : err.message}`,
-              );
-            }
-          }
-        }
-
-        if (!responseText) {
-          log("All strategies failed.");
-          this.importText = `--- IMPORT FAILED ---\nTrace Log:\n${traceLog.join("\n")}`;
-          throw new Error("All strategies failed. Please check the Trace Log.");
-        }
-
-        // 4. PARSING
-        log(`Parsing content from ${successTarget.name}...`);
-        let cardsToImport = [];
-        let debugParser = "";
-
-        const extractFromZone = (zone) => {
-          if (!zone) return;
-          Object.values(zone).forEach((slot) => {
-            const name = slot.card?.name || slot.name;
-            if (slot.quantity && name)
-              cardsToImport.push(`${slot.quantity} ${name}`);
-          });
-        };
-
-        // Strategy A: Next.js Data Blob (Primary for Main Page)
-        if (successTarget.name === "Main") {
-          const nextDataMatch = responseText.match(
-            /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/,
+        if (lines.length === 0) {
+          throw new Error(
+            "No cards found — the deck may be empty or private.",
           );
-          if (nextDataMatch && nextDataMatch[1]) {
-            try {
-              const json = JSON.parse(nextDataMatch[1]);
-              const deckData = json?.props?.pageProps?.deck;
-              if (deckData) {
-                extractFromZone(deckData.commanders);
-                extractFromZone(deckData.mainboard);
-                extractFromZone(deckData.sideboard);
-                debugParser = "NextJS-Hydration";
-              } else {
-                log("   -> JSON parsed but 'deck' prop missing");
-              }
-            } catch (e) {
-              log("Parser A (Hydration) failed: " + e.message);
-            }
-          }
         }
 
-        // Strategy B: JSON API
-        if (cardsToImport.length === 0 && successTarget.format === "json") {
-          try {
-            const data = JSON.parse(responseText);
-            extractFromZone(data.commanders);
-            extractFromZone(data.mainboard);
-            extractFromZone(data.sideboard);
-            debugParser = "API-JSON";
-          } catch (e) {
-            log("Parser B (API) failed: " + e.message);
-          }
-        }
-
-        // 5. Final Result
-        const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
-
-        if (cardsToImport.length > 0) {
-          this.importText = cardsToImport.join("\n");
-          this.importStatus = `Success! (${totalTime}s)\nTarget: ${successTarget.name}\nProxy: ${successProxy}\nParser: ${debugParser}`;
-          log("--- FINISHED SUCCESS ---");
-        } else {
-          this.importText = `--- IMPORT FAILED ---\nTrace Log:\n${traceLog.join("\n")}\n\nContent Preview:\n${responseText.slice(0, 500)}`;
-          this.errorMessage = "No cards found. The deck might be Private.";
-          log("--- FINISHED FAILED ---");
-        }
-
+        // --- 4. Populate text area ---
+        this.importText = lines.join("\n");
         this.importUrl = "";
-      } catch (error) {
-        console.error("Critical Import Error:", error);
-        this.errorMessage = error.message;
+        this.importStatus = `Imported ${lines.length} entries.`;
+      } catch (err) {
+        console.error("[Moxfield import]", err);
+        this.errorMessage = err.message;
+        this.importStatus = "";
       } finally {
         this.isFetchingUrl = false;
       }
+    },
+
+    /** Pull the deck public-ID from a Moxfield URL. */
+    _extractMoxfieldDeckId(url) {
+      const m = url.match(/moxfield\.com\/decks\/([a-zA-Z0-9_-]+)/);
+      return m ? m[1] : null;
+    },
+
+    /**
+     * Try every (API version × CORS proxy) combination until one returns
+     * valid JSON. Throws on total failure.
+     */
+    async _fetchMoxfieldDeck(deckId) {
+      const apis = [
+        `https://api2.moxfield.com/v3/decks/all/${deckId}`,
+        `https://api.moxfield.com/v2/decks/all/${deckId}`,
+      ];
+
+      // Cache-bust to avoid stale proxy results
+      const ts = Date.now();
+
+      const proxies = [
+        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}&_t=${ts}`,
+        (u) =>
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}&_t=${ts}`,
+        (u) =>
+          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+      ];
+
+      const errors = [];
+
+      for (const api of apis) {
+        for (const proxy of proxies) {
+          const proxyUrl = proxy(api);
+          try {
+            this.importStatus = `Trying ${api.includes("v3") ? "v3" : "v2"} API…`;
+
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 15_000);
+
+            const res = await fetch(proxyUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+
+            if (!res.ok) {
+              errors.push(`HTTP ${res.status}`);
+              continue;
+            }
+
+            const text = await res.text();
+
+            // Reject Cloudflare challenge pages / soft 404s
+            if (this._isBadResponse(text)) {
+              errors.push("Blocked / soft-404");
+              continue;
+            }
+
+            const json = JSON.parse(text); // throws if not JSON
+            // Quick sanity check: a valid deck response has a name
+            if (!json.name) {
+              errors.push("JSON missing 'name'");
+              continue;
+            }
+            return json;
+          } catch (e) {
+            errors.push(e.name === "AbortError" ? "Timeout" : e.message);
+          }
+        }
+      }
+
+      // All attempts failed — give the user a helpful message
+      console.warn("[Moxfield import] All proxy attempts failed:", errors);
+      throw new Error(
+        "Could not reach Moxfield (CORS proxy issue). " +
+          'Try pasting your deck list manually — on Moxfield click ••• → "Export" → copy the text.',
+      );
+    },
+
+    /** Detect Cloudflare blocks, Moxfield 404s, and other bad responses. */
+    _isBadResponse(text) {
+      if (!text || text.length < 10) return true;
+      const markers = [
+        "Just a moment",
+        "Cloudflare",
+        '"status":404',
+        '"title":"Not Found"',
+        "Enable JavaScript and cookies",
+        "Attention Required",
+      ];
+      const head = text.slice(0, 2000);
+      return markers.some((m) => head.includes(m));
+    },
+
+    /**
+     * Extract "qty name" lines from a Moxfield API response.
+     * Handles both v3 (boards.{zone}) and v2 (top-level zone maps).
+     */
+    _parseMoxfieldDeck(data) {
+      const lines = [];
+
+      // v3 structure: data.boards.mainboard / .sideboard / .commanders / etc.
+      // v2 structure: data.mainboard / data.sideboard / data.commanders / etc.
+      const zones =
+        data.boards != null
+          ? data.boards // v3
+          : data; // v2
+
+      const zoneNames = [
+        "commanders",
+        "companions",
+        "mainboard",
+        "sideboard",
+      ];
+
+      for (const zone of zoneNames) {
+        const bucket = zones[zone];
+        if (!bucket || typeof bucket !== "object") continue;
+
+        // Each bucket is { someId: { quantity, card: { name, ... } }, ... }
+        for (const slot of Object.values(bucket)) {
+          const qty = slot.quantity || 1;
+          const name = slot.card?.name || slot.name;
+          if (name) lines.push(`${qty} ${name}`);
+        }
+      }
+
+      return lines;
     },
 
     async processImport() {
