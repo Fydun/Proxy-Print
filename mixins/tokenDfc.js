@@ -91,8 +91,6 @@ export default {
       // 4. CLEANUP FLAGS (Crucial!)
       delete card.isFrontFace;
       delete card.isBackFace;
-
-      this.saveSession();
     },
     groupDFCs() {
       this.cards.sort((a, b) => {
@@ -102,7 +100,6 @@ export default {
         if (!aIsDFC && bIsDFC) return 1;
         return 0;
       });
-      this.saveSession();
     },
 
     isTokenOrHelper(part) {
@@ -136,35 +133,44 @@ export default {
         return;
       }
       this.isFetchingTokens = true;
-      const identifier =
-        card.set !== "Local" && card.cn
-          ? { set: card.set, collector_number: card.cn }
-          : { name: card.name };
       try {
-        const response = await fetch(
-          "https://api.scryfall.com/cards/collection",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ identifiers: [identifier] }),
-          },
-        );
-        const data = await response.json();
-        if (data.data && data.data.length > 0) {
-          const scryCard = data.data[0];
-          const tokenIds = new Set();
-          if (scryCard.all_parts) {
-            scryCard.all_parts.forEach((part) => {
-              if (this.isTokenOrHelper(part)) {
-                tokenIds.add(part.id);
-              }
-            });
+        // Use stored all_parts if available (saved at import time), otherwise fetch
+        let allParts = card.all_parts;
+        if (!allParts) {
+          const identifier =
+            card.set !== "Local" && card.cn
+              ? { set: card.set, collector_number: card.cn }
+              : { name: card.name };
+          const response = await fetch(
+            "https://api.scryfall.com/cards/collection",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ identifiers: [identifier] }),
+            },
+          );
+          const data = await response.json();
+          if (data.data && data.data.length > 0) {
+            allParts = data.data[0].all_parts;
+            // Cache for future use
+            card.all_parts = allParts || null;
           }
+        }
+
+        if (allParts) {
+          const tokenIds = new Set();
+          allParts.forEach((part) => {
+            if (this.isTokenOrHelper(part)) {
+              tokenIds.add(part.id);
+            }
+          });
           if (tokenIds.size > 0) {
             await this.resolveAndAddTokens(Array.from(tokenIds));
           } else {
             this.errorMessage = `No tokens found for ${card.name}`;
           }
+        } else {
+          this.errorMessage = `No tokens found for ${card.name}`;
         }
       } catch (e) {
         console.error("Token fetch error", e);
@@ -177,56 +183,80 @@ export default {
       this.isFetchingTokens = true;
       this.statusMessage = "Scanning deck for tokens and mechanics...";
 
-      // 1. Identify all cards in the deck to check their parts
-      const identifiers = this.cards
-        .filter((c) => !(c.set === "Local" && !c.cn))
-        .map((c) =>
+      const tokensToFetchIds = new Set();
+
+      // 1. Collect token IDs from cards that already have all_parts cached
+      const needsFetch = [];
+      for (const c of this.cards) {
+        if (c.set === "Local" && !c.cn) continue;
+        if (c.layout === "token" || c.layout === "double_faced_token") continue;
+
+        if (c.all_parts) {
+          c.all_parts.forEach((part) => {
+            if (this.isTokenOrHelper(part)) {
+              tokensToFetchIds.add(part.id);
+            }
+          });
+        } else {
+          needsFetch.push(c);
+        }
+      }
+
+      // 2. Only fetch cards that don't have all_parts stored
+      if (needsFetch.length > 0) {
+        const identifiers = needsFetch.map((c) =>
           c.set !== "Local" && c.cn
             ? { set: c.set, collector_number: c.cn }
             : { name: c.name },
         );
 
-      if (identifiers.length === 0) {
-        this.isFetchingTokens = false;
-        return;
+        const BATCH_SIZE = 75;
+        const batches = [];
+        for (let i = 0; i < identifiers.length; i += BATCH_SIZE)
+          batches.push({ ids: identifiers.slice(i, i + BATCH_SIZE), cards: needsFetch.slice(i, i + BATCH_SIZE) });
+
+        for (const batch of batches) {
+          try {
+            const res = await fetch("https://api.scryfall.com/cards/collection", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ identifiers: batch.ids }),
+            });
+            const data = await res.json();
+
+            if (data.data) {
+              data.data.forEach((scryCard) => {
+                if (scryCard.layout === "token" || scryCard.layout === "double_faced_token")
+                  return;
+
+                // Cache all_parts on the matching deck card for future use
+                const deckCard = batch.cards.find(
+                  (c) =>
+                    (c.set === scryCard.set.toUpperCase() && c.cn === scryCard.collector_number) ||
+                    c.name.toLowerCase().startsWith(scryCard.name.toLowerCase().split(" // ")[0])
+                );
+                if (deckCard && scryCard.all_parts) {
+                  deckCard.all_parts = scryCard.all_parts;
+                }
+
+                if (scryCard.all_parts) {
+                  scryCard.all_parts.forEach((part) => {
+                    if (this.isTokenOrHelper(part)) {
+                      tokensToFetchIds.add(part.id);
+                    }
+                  });
+                }
+              });
+            }
+            // Be polite to API
+            await new Promise((r) => setTimeout(r, 75));
+          } catch (e) {
+            console.error("Batch token scan error", e);
+          }
+        }
       }
 
-      const BATCH_SIZE = 75;
-      const batches = [];
-      for (let i = 0; i < identifiers.length; i += BATCH_SIZE)
-        batches.push(identifiers.slice(i, i + BATCH_SIZE));
-
-      const tokensToFetchIds = new Set();
-
       try {
-        // 2. Fetch full card objects from Scryfall to inspect 'all_parts'
-        for (let batch of batches) {
-          const res = await fetch("https://api.scryfall.com/cards/collection", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ identifiers: batch }),
-          });
-          const data = await res.json();
-
-          if (data.data) {
-            data.data.forEach((c) => {
-              // Don't fetch tokens for cards that ARE tokens
-              if (c.layout === "token" || c.layout === "double_faced_token")
-                return;
-
-              if (c.all_parts) {
-                c.all_parts.forEach((part) => {
-                  if (this.isTokenOrHelper(part)) {
-                    tokensToFetchIds.add(part.id);
-                  }
-                });
-              }
-            });
-          }
-          // Be polite to API
-          await new Promise((r) => setTimeout(r, 75));
-        }
-
         if (tokensToFetchIds.size > 0) {
           this.statusMessage = `Found ${tokensToFetchIds.size} tokens/markers. downloading...`;
           await this.resolveAndAddTokens(Array.from(tokensToFetchIds));
@@ -235,7 +265,7 @@ export default {
           this.errorMessage = "No tokens or extra parts found for this deck.";
         }
       } catch (e) {
-        console.error("Batch token error", e);
+        console.error("Token resolve error", e);
         this.errorMessage = "Failed to fetch tokens (Network/API Error).";
       } finally {
         this.isFetchingTokens = false;
@@ -320,6 +350,7 @@ export default {
                 isDuplex: false,
                 oracle_id: token.oracle_id,
                 lang: token.lang,
+                all_parts: token.all_parts || null,
                 cmc: token.cmc || 0,
                 color: (token.colors || []).join(""),
                 color_identity: token.color_identity || [],

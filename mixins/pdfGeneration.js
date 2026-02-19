@@ -202,7 +202,21 @@ export default {
       this.errorMessage = "";
       this.statusMessage = "Initializing PDF generation..."; // Notify user start
 
+      // Lazy-load jsPDF on first use (removed from index.html for faster page load)
+      if (!window.jspdf) {
+        this.statusMessage = "Loading PDF library...";
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("Failed to load jsPDF"));
+          document.head.appendChild(script);
+        });
+      }
+
       // SNAPSHOT SETTINGS for stability during async generation
+      // Note: structuredClone() can't handle Vue reactive Proxies, so we
+      // round-trip through JSON to strip the Proxy wrapper first.
       const currentSettings = JSON.parse(JSON.stringify(this.settings));
       const useDuplex = this.globalDuplex && this.hasDFC;
 
@@ -451,6 +465,8 @@ export default {
         this.statusMessage = "";
       } finally {
         this.isGenerating = false;
+        // Release decoded image bitmaps from memory
+        if (this._imgPromiseCache) this._imgPromiseCache.clear();
         // Resume prefetch if it was interrupted by PDF generation
         this.runPrefetch();
       }

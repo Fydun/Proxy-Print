@@ -42,9 +42,6 @@ createApp({
       statusMessage: "",
       errorMessage: "",
 
-      // Local Image Cache (url → dataUrl)
-      localImages: {},
-
       // Modals
       showImportModal: false,
       showVersionModal: false,
@@ -93,7 +90,6 @@ createApp({
       },
 
       // Cache & Preferences
-      versionCache: new Map(),
       preferredVersions: {},
       sortState: { key: "", order: "asc" },
       previewPages: [],
@@ -106,6 +102,7 @@ createApp({
       langChangeTotal: 0,
       langChangeCurrent: 0,
       prefetchRunId: 0,
+      localImagesVersion: 0, // Bumped when thumbnails finish loading (triggers re-render)
     };
   },
   computed: {
@@ -231,7 +228,7 @@ createApp({
           if (this._processedImgCache) {
             this._processedImgCache.clear();
           }
-          this.clearCacheDB();
+          this.clearProcessedImages();
         }
 
         // Auto-set dimensions based on presets
@@ -270,12 +267,21 @@ createApp({
       if (val) this.checkStorageUsage();
     },
   },
+  created() {
+    // Non-reactive caches — these don't drive template rendering
+    // and avoid Vue's Proxy overhead for large data structures.
+    this.localImages = {};      // url → dataUrl (thumbnails, write-once)
+    this.versionCache = new Map(); // fullCacheKey → version list
+  },
   async mounted() {
     //Wait for saved settings to load from IndexedDB
     await this.loadSession();
 
     // Initialize parallel image processing workers
     this.initWorkerPool();
+
+    // Enforce cache size budget (500MB) — evicts oldest processed images if over
+    this.evictCacheIfNeeded();
 
     // Load locally cached thumbnails, then download any missing ones
     await this.loadLocalImages();
