@@ -65,59 +65,156 @@
       <!-- ================================================================== -->
       <!--                            HEADER & TOOLBAR                        -->
       <!-- ================================================================== -->
-      <div
-        class="bg-surface rounded-xl shadow-sm border border-line mb-8 relative z-20 transition-colors"
-      >
-        <!-- Branding & File Operations -->
-        <div
-          class="px-6 py-3 border-b border-gray-100 dark:border-gray-700 flex flex-col md:flex-row justify-between items-center gap-4 bg-secondary/50 dark:bg-gray-700/50 rounded-t-xl"
-        >
-          <div>
-            <h1
-              class="text-xl font-bold text-primary tracking-tight flex items-center gap-2"
-            >
-              <app-icon name="logo" class="h-6 w-6 text-indigo-600"></app-icon>
-              Proxy Printer
-            </h1>
-          </div>
-          <!-- Project Management Buttons -->
-          <div class="flex items-center gap-2">
-            <span
-              class="text-xs text-gray-400 mr-2 border-r pr-3 hidden sm:inline"
-              >{{ settings.paperSize.toUpperCase() }} • {{ settings.cardWidth
-              }}x{{ settings.cardHeight }}mm</span
-            >
+      <nav class="toolbar-glass sticky top-4 z-20 mb-8 rounded-2xl px-3 py-2.5 transition-colors">
+        <div class="flex items-center gap-2 flex-wrap">
 
+          <!-- ─── Brand ─── -->
+          <div class="flex items-center gap-2.5 pr-3 border-r border-line/40 mr-1 shrink-0">
+            <app-icon name="logo" class="h-6 w-6 text-indigo-500 shrink-0"></app-icon>
+            <div class="flex flex-col leading-none">
+              <span class="font-bold text-primary text-sm tracking-tight">Proxy Printer</span>
+              <span class="text-[10px] text-muted">{{ settings.paperSize.toUpperCase() }} · {{ settings.cardWidth }}×{{ settings.cardHeight }}mm</span>
+            </div>
+            <span
+              v-if="cards.length"
+              class="ml-0.5 text-[11px] font-semibold bg-indigo-500/15 text-indigo-600 dark:text-indigo-300 px-2 py-0.5 rounded-full tabular-nums"
+            >
+              {{ totalCards }}
+            </span>
+          </div>
+
+          <!-- ─── Deck Actions ─── -->
+          <div class="flex items-center toolbar-group">
+            <button
+              @click="openDeckEditor"
+              :disabled="isGenerating"
+              class="toolbar-seg-btn"
+              title="Edit Deck"
+            >
+              <app-icon name="edit-deck" class="h-4 w-4"></app-icon>
+              <span class="hidden sm:inline">Edit</span>
+            </button>
+            <button
+              @click="fetchAllTokens"
+              :disabled="isFetchingTokens || isGenerating"
+              class="toolbar-seg-btn"
+              title="Fetch tokens & helpers"
+            >
+              <div
+                v-if="isFetchingTokens"
+                class="spinner border-gray-400 border-t-gray-700 !w-3.5 !h-3.5"
+              ></div>
+              <app-icon v-else name="tokens" class="h-4 w-4"></app-icon>
+              <span class="hidden lg:inline">Tokens</span>
+            </button>
+            <!-- Sort Dropdown -->
+            <div class="relative">
+              <button
+                @click="showSortMenu = !showSortMenu"
+                :disabled="isGenerating"
+                class="toolbar-seg-btn"
+                title="Sort cards"
+              >
+                <app-icon
+                  name="sort"
+                  :class="{'scale-y-[-1]': sortState.order === 'desc'}"
+                  class="h-4 w-4 transition-transform duration-200"
+                ></app-icon>
+                <span class="hidden md:inline">Sort</span>
+              </button>
+              <div
+                v-if="showSortMenu"
+                class="fixed inset-0 z-20 cursor-default"
+                @click="showSortMenu = false"
+              ></div>
+              <div
+                v-if="showSortMenu"
+                class="absolute top-full left-0 mt-2 w-48 bg-surface rounded-xl shadow-2xl border border-line/60 z-30 overflow-hidden backdrop-blur-xl py-1"
+              >
+                <button @click="sortCards('auto')" class="sort-menu-item font-semibold">Auto</button>
+                <hr class="border-line/40 mx-2.5 my-1" />
+                <button @click="sortCards('name')" class="sort-menu-item">Name (A-Z)</button>
+                <button @click="sortCards('color')" class="sort-menu-item">Color (WUBRG)</button>
+                <button @click="sortCards('cmc')" class="sort-menu-item">Mana Value</button>
+                <button @click="sortCards('type')" class="sort-menu-item">Type</button>
+                <button @click="sortCards('dfc')" class="sort-menu-item">Double-Faced</button>
+                <button @click="sortCards('tokens')" class="sort-menu-item">Cards First</button>
+                <button @click="sortCards('lang')" class="sort-menu-item">Language</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ─── Separator ─── -->
+          <div class="w-px h-6 bg-line/30 hidden md:block"></div>
+
+          <!-- ─── Duplex Toggle ─── -->
+          <label
+            class="toolbar-seg-btn cursor-pointer select-none !gap-2"
+            :class="{'!opacity-40 pointer-events-none': !hasDFC || isGenerating}"
+            title="Double-sided printing"
+          >
+            <div
+              class="relative w-7 h-4 rounded-full transition-colors shrink-0"
+              :class="globalDuplex && hasDFC ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'"
+            >
+              <div
+                class="absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full transition-transform shadow-sm"
+                :class="{'translate-x-3': globalDuplex && hasDFC}"
+              ></div>
+            </div>
+            <span class="text-xs hidden sm:inline">Duplex</span>
+            <input type="checkbox" v-model="globalDuplex" :disabled="!hasDFC || isGenerating" class="hidden" />
+          </label>
+
+          <!-- ─── Separator ─── -->
+          <div class="w-px h-6 bg-line/30 hidden md:block"></div>
+
+          <!-- ─── Utility Icons ─── -->
+          <div class="flex items-center gap-0.5">
+            <button
+              @click="showSettingsModal = true"
+              :disabled="isGenerating"
+              class="toolbar-icon-btn"
+              title="Print Settings"
+            >
+              <app-icon name="settings" class="h-[18px] w-[18px]"></app-icon>
+            </button>
             <button
               @click="toggleDarkMode"
-              class="text-xs font-medium text-muted hover:text-blue-600 px-2 py-1.5 rounded-md hover:bg-surface border border-transparent hover:border-line transition-all"
-              :title="settings.darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'"
+              class="toolbar-icon-btn"
+              :title="settings.darkMode ? 'Light mode' : 'Dark mode'"
             >
-              <app-icon
-                :name="settings.darkMode ? 'sun' : 'moon'"
-                class="h-5 w-5"
-              ></app-icon>
+              <app-icon :name="settings.darkMode ? 'sun' : 'moon'" class="h-[18px] w-[18px]"></app-icon>
             </button>
-
             <button
               @click="showHelpModal = true"
-              class="text-xs font-medium text-muted hover:text-blue-600 px-2 py-1.5 rounded-md hover:bg-surface border border-transparent hover:border-line transition-all flex items-center justify-center"
+              class="toolbar-icon-btn"
+              title="Help & shortcuts"
             >
-              <app-icon name="help" class="h-5 w-5"></app-icon>
+              <app-icon name="help" class="h-[18px] w-[18px]"></app-icon>
             </button>
+          </div>
+
+          <!-- ─── Separator ─── -->
+          <div class="w-px h-6 bg-line/30 hidden md:block"></div>
+
+          <!-- ─── File Ops ─── -->
+          <div class="flex items-center toolbar-group">
             <button
               @click="saveProject"
-              class="text-xs font-medium text-muted hover:text-blue-600 px-3 py-1.5 rounded-md hover:bg-surface border border-transparent hover:border-line transition-all flex items-center gap-1.5"
+              class="toolbar-seg-btn"
+              title="Save project to file"
             >
               <app-icon name="save" class="h-4 w-4"></app-icon>
-              Save
+              <span class="hidden lg:inline">Save</span>
             </button>
             <button
               @click="$refs.projectInput.click()"
-              class="text-xs font-medium text-muted hover:text-blue-600 px-3 py-1.5 rounded-md hover:bg-surface border border-transparent hover:border-line transition-all flex items-center gap-1.5"
+              class="toolbar-seg-btn"
+              title="Load project from file"
             >
               <app-icon name="upload" class="h-4 w-4"></app-icon>
-              Load
+              <span class="hidden lg:inline">Load</span>
             </button>
             <input
               type="file"
@@ -127,179 +224,33 @@
               @change="loadProject"
             />
           </div>
-        </div>
 
-        <!-- Main Action Bar -->
-        <div
-          class="p-4 flex flex-col xl:flex-row gap-4 justify-between items-center"
-        >
-          <!-- Left: Deck Management -->
-          <div
-            class="flex flex-wrap justify-center xl:justify-start gap-2 w-full xl:w-auto"
-          >
-            <button
-              @click="openDeckEditor"
-              :disabled="isGenerating"
-              class="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 font-semibold rounded-lg transition-colors border border-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <app-icon name="edit-deck" class="h-5 w-5"></app-icon>
-              Edit Deck
-            </button>
-            <button
-              @click="fetchAllTokens"
-              :disabled="isFetchingTokens || isGenerating"
-              class="flex items-center gap-2 px-4 py-2 bg-secondary text-primary dark:text-gray-200 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-line disabled:opacity-50"
-              title="Add all tokens and helper cards"
-            >
-              <div
-                v-if="isFetchingTokens"
-                class="spinner border-gray-400 border-t-gray-700 w-4 h-4"
-              ></div>
-              <app-icon name="tokens" class="h-5 w-5"></app-icon>
-              <span class="hidden lg:inline">Tokens</span>
-            </button>
+          <!-- ─── Spacer (pushes output actions to the right on wide screens) ─── -->
+          <div class="flex-1 hidden xl:block"></div>
 
-            <!-- Sorting Dropdown -->
-            <div class="relative">
-              <button
-                @click="showSortMenu = !showSortMenu"
-                :disabled="isGenerating"
-                class="flex items-center gap-2 px-4 py-2 bg-secondary text-primary dark:text-gray-200 hover:bg-gray-100 font-medium rounded-lg transition-colors border border-line disabled:opacity-50"
-                title="Sorting options"
-              >
-                <!-- Arrow flips vertically to indicate direction -->
-                <app-icon
-                  name="sort"
-                  :class="{'scale-y-[-1]': sortState.order === 'desc'}"
-                  class="h-5 w-5 transition-transform duration-200"
-                ></app-icon>
-                <span>Sort</span>
-              </button>
-              <!-- Click Outside Overlay -->
-              <div
-                v-if="showSortMenu"
-                class="fixed inset-0 z-20 cursor-default"
-                @click="showSortMenu = false"
-              ></div>
-              <!-- Sort Menu Items -->
-              <div
-                v-if="showSortMenu"
-                class="absolute top-full left-0 mt-1 w-48 bg-surface rounded-lg shadow-xl border border-gray-100 z-30 overflow-hidden"
-              >
-                <button
-                  @click="sortCards('auto')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary font-semibold"
-                >
-                  Auto
-                </button>
-                <hr class="border-line mx-2" />
-                <button
-                  @click="sortCards('name')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Name (A-Z)
-                </button>
-                <button
-                  @click="sortCards('color')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Color (WUBRG)
-                </button>
-                <button
-                  @click="sortCards('cmc')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Mana Value (Low-High)
-                </button>
-                <button
-                  @click="sortCards('type')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Type
-                </button>
-                <button
-                  @click="sortCards('dfc')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Double-Faced Cards
-                </button>
-                <button
-                  @click="sortCards('tokens')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Cards First
-                </button>
-                <button
-                  @click="sortCards('lang')"
-                  class="block w-full text-left px-4 py-2 text-sm hover:bg-secondary"
-                >
-                  Language
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Right: Print Actions -->
-          <div
-            class="flex flex-wrap justify-center xl:justify-end items-center gap-3 w-full xl:w-auto"
-          >
-            <!-- Duplex Toggle -->
-            <label
-              class="cursor-pointer flex items-center gap-2 bg-surface border border-line px-3 py-2 rounded-lg hover:border-line transition-colors select-none"
-              :class="{'opacity-50': !hasDFC || isGenerating, 'pointer-events-none': isGenerating}"
-              title="Enable for double-sided printing"
-            >
-              <span class="text-sm font-medium text-muted">Duplex</span>
-              <div
-                class="relative w-9 h-5 bg-gray-200 rounded-full transition-colors"
-                :class="{'bg-green-500': globalDuplex && hasDFC}"
-              >
-                <div
-                  class="absolute left-0.5 top-0.5 w-4 h-4 bg-surface rounded-full transition-transform shadow-sm"
-                  :class="{'translate-x-4': globalDuplex && hasDFC}"
-                ></div>
-              </div>
-              <input
-                type="checkbox"
-                v-model="globalDuplex"
-                :disabled="!hasDFC || isGenerating"
-                class="hidden"
-              />
-            </label>
-
-            <button
-              @click="showSettingsModal = true"
-              :disabled="isGenerating"
-              class="p-2.5 text-muted hover:text-primary dark:text-gray-200 hover:bg-gray-100 rounded-lg transition-colors border border-transparent hover:border-line disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-              title="Print Settings"
-            >
-              <app-icon name="settings" class="h-6 w-6"></app-icon>
-            </button>
-
-            <div class="w-px h-8 bg-gray-200 mx-1 hidden sm:block"></div>
-
-            <!-- Generate & Preview Buttons -->
+          <!-- ─── Output Actions ─── -->
+          <div class="flex items-center gap-2 ml-auto xl:ml-0">
             <button
               @click="openPreview"
               :disabled="cards.length === 0 || isGenerating"
-              class="flex items-center gap-2 px-5 py-2.5 bg-surface text-purple-700 border border-purple-200 hover:bg-purple-50 hover:border-purple-300 font-bold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              class="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-semibold rounded-xl border border-purple-200 dark:border-purple-500/30 text-purple-600 dark:text-purple-300 bg-purple-50/80 dark:bg-purple-500/10 hover:bg-purple-100 dark:hover:bg-purple-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <app-icon name="preview" class="h-5 w-5"></app-icon>
-              <span class="hidden lg:inline">Preview</span>
-              <span class="lg:hidden">View</span>
+              <app-icon name="preview" class="h-4 w-4"></app-icon>
+              <span class="hidden sm:inline">Preview</span>
+              <span class="sm:hidden">View</span>
             </button>
-
             <button
               @click="generatePDF"
               :disabled="cards.length === 0 || isGenerating"
-              class="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              class="flex items-center gap-2 px-5 py-1.5 text-sm font-bold rounded-xl text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
             >
-              <div v-if="isGenerating" class="spinner w-5 h-5"></div>
+              <div v-if="isGenerating" class="spinner w-4 h-4"></div>
               <span v-else>Download PDF</span>
             </button>
           </div>
+
         </div>
-      </div>
+      </nav>
 
       <!-- ================================================================== -->
       <!--                            STATUS MESSAGES                         -->
