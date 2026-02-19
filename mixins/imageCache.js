@@ -216,6 +216,10 @@ export default {
         this._workerCallbacks.set(taskId, {
           resolve: (data) => {
             clearTimeout(timeout);
+            // Convert transferred ArrayBuffer to Uint8Array for jsPDF
+            if (data.imageBuffer) {
+              data.imageData = new Uint8Array(data.imageBuffer);
+            }
             resolve(data);
           },
           reject: (err) => {
@@ -235,7 +239,7 @@ export default {
       return this._prefetchCanvas;
     },
 
-    async processCardToCache(src) {
+    async processCardToCache(src, { skipCacheCheck = false } = {}) {
       if (!src) return;
 
       const scale = Number(this.settings.cardScale) / 100;
@@ -246,9 +250,11 @@ export default {
 
       const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
 
-      // Check IDB first
-      const cached = await this.getFromCache(cacheKey);
-      if (cached) return;
+      // Skip IDB check when caller (runPrefetch) already verified it's uncached
+      if (!skipCacheCheck) {
+        const cached = await this.getFromCache(cacheKey);
+        if (cached) return;
+      }
 
       try {
         const imgObj = await this.loadImage(src);
@@ -306,8 +312,11 @@ export default {
             ctx.fillText("PROXY", targetW / 2, targetH - targetH * 0.035);
           }
 
-          const croppedData = canvas.toDataURL("image/jpeg", 0.85);
-          await this.saveToCache(cacheKey, croppedData);
+          // Store as Blob (~33% smaller than base64 data URL)
+          const blob = await new Promise((res) =>
+            canvas.toBlob(res, "image/jpeg", 0.85),
+          );
+          await this.saveToCache(cacheKey, blob);
         }
       } catch (e) {
         console.warn("Prefetch failed for", src, e);
@@ -400,7 +409,7 @@ export default {
             try {
               // Race against a 30s timeout to prevent hanging
               await Promise.race([
-                this.processCardToCache(src),
+                this.processCardToCache(src, { skipCacheCheck: true }),
                 new Promise((_, reject) =>
                   setTimeout(() => reject(new Error("Timeout")), 30000),
                 ),

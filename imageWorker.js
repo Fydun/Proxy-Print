@@ -111,12 +111,19 @@ self.onmessage = async (e) => {
       const existing = await getFromCache(cacheKey);
       if (existing) {
         if (imageBitmap) imageBitmap.close();
-        self.postMessage({
-          taskId,
-          status: "done",
-          cached: true,
-          dataUrl: returnData ? existing : undefined,
-        });
+        let imageBuffer;
+        if (returnData) {
+          // Convert cached Blob (or legacy string) back to ArrayBuffer
+          if (existing instanceof Blob) {
+            imageBuffer = await existing.arrayBuffer();
+          } else if (typeof existing === "string") {
+            // Legacy base64 data URL — pass as-is via dataUrl field
+            self.postMessage({ taskId, status: "done", cached: true, dataUrl: existing });
+            return;
+          }
+        }
+        const msg = { taskId, status: "done", cached: true, imageBuffer };
+        self.postMessage(msg, imageBuffer ? [imageBuffer] : []);
         return;
       }
     }
@@ -174,23 +181,29 @@ self.onmessage = async (e) => {
 
     // Encode to JPEG (quality 0.85 matches main-thread settings)
     const blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.85 });
-    const dataUrl = await blobToDataURL(blob);
 
-    // Write to IndexedDB directly from the worker (non-fatal if fails)
+    // Store Blob directly in IDB (~33% smaller than base64 data URL)
     try {
-      await saveToCache(cacheKey, dataUrl);
+      await saveToCache(cacheKey, blob);
     } catch (cacheErr) {
-      // Non-fatal: we still have the processed data to return
       console.warn("Worker cache write failed:", cacheErr);
     }
 
-    // Return result to main thread
-    self.postMessage({
+    // Only convert for caller if returnData is requested (PDF generation)
+    // Transfer raw ArrayBuffer (zero-copy) instead of base64 string
+    let imageBuffer;
+    if (returnData) {
+      imageBuffer = await blob.arrayBuffer();
+    }
+
+    const msg = {
       taskId,
       status: "done",
       cached: false,
-      dataUrl: returnData ? dataUrl : undefined,
-    });
+      imageBuffer,
+    };
+    // Transfer the ArrayBuffer for zero-copy (buffer becomes detached in worker)
+    self.postMessage(msg, imageBuffer ? [imageBuffer] : []);
   } catch (err) {
     // Clean up bitmap on error
     if (e.data.imageBitmap) {

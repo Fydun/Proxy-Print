@@ -520,9 +520,14 @@ export default {
         sources.map(async (src, i) => {
           if (!src) return null;
           try {
-            // Check cache first
+            // Check cache first (IDB stores Blobs; convert to Uint8Array for jsPDF)
             const cached = cachedResults.get(cacheKeys[i]);
-            if (cached) return cached;
+            if (cached) {
+              if (cached instanceof Blob) {
+                return new Uint8Array(await cached.arrayBuffer());
+              }
+              return cached; // Legacy base64 data URL
+            }
 
             // Not cached — process the image
             const imgObj = await this.loadImage(src);
@@ -540,7 +545,7 @@ export default {
                 checkCache: false,
                 returnData: true,
               });
-              return result.dataUrl;
+              return result.imageData || result.dataUrl;
             } else {
               // Fallback: create a dedicated canvas per image (safe for concurrent calls)
               const fallbackCanvas = document.createElement("canvas");
@@ -578,9 +583,11 @@ export default {
                 fallbackCtx.fillText("PROXY", targetW / 2, targetH - targetH * 0.035);
               }
 
-              const croppedData = fallbackCanvas.toDataURL("image/jpeg", 0.85);
-              this.saveToCache(cacheKeys[i], croppedData).catch(() => {});
-              return croppedData;
+              const blob = await new Promise((res) =>
+                fallbackCanvas.toBlob(res, "image/jpeg", 0.85),
+              );
+              this.saveToCache(cacheKeys[i], blob).catch(() => {});
+              return new Uint8Array(await blob.arrayBuffer());
             }
           } catch (err) {
             console.warn("resolveCardImages failed for:", src, err);
@@ -609,8 +616,11 @@ export default {
         // Create a unique key based on visual settings
         const cacheKey = `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}`;
 
-        // Check IDB Cache
+        // Check IDB Cache (stored as Blob for efficiency)
         let croppedData = await this.getFromCache(cacheKey);
+        if (croppedData instanceof Blob) {
+          croppedData = new Uint8Array(await croppedData.arrayBuffer());
+        }
 
         // If not in cache, process the image (offload to worker if available)
         if (!croppedData) {
@@ -630,7 +640,7 @@ export default {
               checkCache: false,
               returnData: true,
             });
-            croppedData = result.dataUrl;
+            croppedData = result.imageData || result.dataUrl;
           } else {
             // Fallback: use the provided canvas (sequential, safe during PDF gen)
             const canvasW = canvas.width;
@@ -675,8 +685,11 @@ export default {
               ctx.fillText("PROXY", canvasW / 2, canvasH - canvasH * 0.035);
             }
 
-            croppedData = canvas.toDataURL("image/jpeg", 0.85);
-            await this.saveToCache(cacheKey, croppedData);
+            const blob = await new Promise((res) =>
+              canvas.toBlob(res, "image/jpeg", 0.85),
+            );
+            await this.saveToCache(cacheKey, blob);
+            croppedData = new Uint8Array(await blob.arrayBuffer());
           }
         }
 
