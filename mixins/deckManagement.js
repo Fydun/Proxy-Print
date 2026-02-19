@@ -59,22 +59,15 @@ export default {
         return null;
       };
 
-      const snapshotCard = (card) => {
-        const currentLocalUrls = {};
-        [card.src, card.smallSrc, card.backSrc, card.smallBackSrc].forEach(u => {
-          if (u && this.localImages[u]) currentLocalUrls[u] = this.localImages[u];
-        });
-        return {
-          src: card.src,
-          smallSrc: card.smallSrc,
-          backSrc: card.backSrc,
-          smallBackSrc: card.smallBackSrc,
-          set: card.set,
-          cn: card.cn,
-          dfcData: card.dfcData ? { ...card.dfcData } : null,
-          localUrls: currentLocalUrls,
-        };
-      };
+      const snapshotCard = (card) => ({
+        src: card.src,
+        smallSrc: card.smallSrc,
+        backSrc: card.backSrc,
+        smallBackSrc: card.smallBackSrc,
+        set: card.set,
+        cn: card.cn,
+        dfcData: card.dfcData ? { ...card.dfcData } : null,
+      });
 
       const applyCardData = (card, newData) => {
         card.langCache[card.lang] = snapshotCard(card);
@@ -102,7 +95,6 @@ export default {
           set: card.set,
           cn: card.cn,
           dfcData: card.dfcData ? { ...card.dfcData } : null,
-          localUrls: {},
         };
       };
 
@@ -136,22 +128,34 @@ export default {
         needsFetch.push(card);
       }
 
-      // --- Phase 2: Batch fetch from Scryfall using /cards/collection ---
+      // --- Phase 2: Batch fetch from Scryfall, deduplicated by unique printing ---
+      // If you have 4x Lightning Bolt (DMR, 123), we only call Scryfall once
+      // for that printing instead of 4 times.
       if (needsFetch.length > 0) {
-        const BATCH_SIZE = 75;
-        for (let i = 0; i < needsFetch.length; i += BATCH_SIZE) {
-          const batch = needsFetch.slice(i, i + BATCH_SIZE);
+        // Group cards by unique printing (set + collector number)
+        const printGroups = new Map();
+        for (const card of needsFetch) {
+          const enSnapshot = card.langCache['en'];
+          const lookupSet = (enSnapshot?.set || card.set).toLowerCase();
+          const lookupCn = enSnapshot?.cn || card.cn;
+          const key = `${lookupSet}_${lookupCn}`;
+          if (!printGroups.has(key)) {
+            printGroups.set(key, { set: lookupSet, cn: lookupCn, cards: [] });
+          }
+          printGroups.get(key).cards.push(card);
+        }
 
-          // Build identifiers: use English set/cn for exact match in target language
-          const identifiers = batch.map((card) => {
-            const enSnapshot = card.langCache['en'];
-            const lookupSet = (enSnapshot?.set || card.set).toLowerCase();
-            const lookupCn = enSnapshot?.cn || card.cn;
-            return { set: lookupSet, collector_number: lookupCn };
-          });
+        const uniquePrintings = Array.from(printGroups.values());
+        const BATCH_SIZE = 75;
+
+        for (let i = 0; i < uniquePrintings.length; i += BATCH_SIZE) {
+          const batch = uniquePrintings.slice(i, i + BATCH_SIZE);
+          const identifiers = batch.map((g) => ({
+            set: g.set,
+            collector_number: g.cn,
+          }));
 
           try {
-            // Try exact printings in the target language via collection endpoint
             const res = await fetch(
               "https://api.scryfall.com/cards/collection",
               {
@@ -162,7 +166,6 @@ export default {
             );
             const data = await res.json();
 
-            // Build lookup map from results
             const foundMap = new Map();
             if (data.data) {
               data.data.forEach((c) => {
@@ -171,28 +174,23 @@ export default {
               });
             }
 
-            // Apply results and identify cards that need individual fallback
-            const fallbackCards = [];
-            for (let j = 0; j < batch.length; j++) {
-              const card = batch[j];
-              const id = identifiers[j];
-              const key = `${id.set}_${id.collector_number}`;
+            const fallbackGroups = [];
+            for (const group of batch) {
+              const key = `${group.set}_${group.cn}`;
               let matchData = foundMap.get(key);
 
-              // Check if returned card is actually in the target language
+              // One lang endpoint call per unique printing (not per card copy)
               if (matchData && matchData.lang !== targetLang) {
-                // Collection returns English by default — try the lang endpoint
                 try {
                   const langRes = await fetch(
-                    `https://api.scryfall.com/cards/${id.set}/${id.collector_number}/${targetLang}`,
+                    `https://api.scryfall.com/cards/${group.set}/${group.cn}/${targetLang}`,
                   );
                   if (langRes.ok) {
                     const langData = await langRes.json();
-                    if (langData.image_status !== 'placeholder') {
-                      matchData = langData;
-                    } else {
-                      matchData = null;
-                    }
+                    matchData =
+                      langData.image_status !== "placeholder"
+                        ? langData
+                        : null;
                   } else {
                     matchData = null;
                   }
@@ -202,28 +200,31 @@ export default {
                 }
               }
 
-              // Skip placeholders
-              if (matchData && matchData.image_status === 'placeholder') {
+              if (matchData && matchData.image_status === "placeholder") {
                 matchData = null;
               }
 
               if (matchData) {
-                applyCardData(card, matchData);
-                updatedCount++;
+                // Apply the single API result to ALL cards with this printing
+                for (const card of group.cards) {
+                  applyCardData(card, matchData);
+                  updatedCount++;
+                  this.langChangeCurrent++;
+                }
               } else {
-                fallbackCards.push(card);
+                fallbackGroups.push(group);
               }
-              this.langChangeCurrent++;
             }
 
-            // Fallback: for cards not found via exact match, try search
-            for (const card of fallbackCards) {
+            // Fallback search: once per unique printing, applied to all copies
+            for (const group of fallbackGroups) {
+              const representative = group.cards[0];
               try {
                 let query = `lang:${targetLang} unique:prints`;
-                if (card.oracle_id) {
-                  query += ` oracle_id:${card.oracle_id}`;
+                if (representative.oracle_id) {
+                  query += ` oracle_id:${representative.oracle_id}`;
                 } else {
-                  const cleanName = card.name
+                  const cleanName = representative.name
                     .split(" // ")[0]
                     .replace(/ \(.*?\)/g, "");
                   query += ` !"${cleanName}"`;
@@ -234,28 +235,50 @@ export default {
                 );
                 if (searchRes.ok) {
                   const searchData = await searchRes.json();
-                  const match = searchData.data?.find(c => c.image_status !== 'placeholder') || null;
+                  const match =
+                    searchData.data?.find(
+                      (c) => c.image_status !== "placeholder",
+                    ) || null;
                   if (match) {
-                    applyCardData(card, match);
-                    updatedCount++;
+                    for (const card of group.cards) {
+                      applyCardData(card, match);
+                      updatedCount++;
+                      this.langChangeCurrent++;
+                    }
                   } else {
-                    card.langCache[targetLang] = null;
-                    failedCount++;
+                    for (const card of group.cards) {
+                      card.langCache[targetLang] = null;
+                      failedCount++;
+                      this.langChangeCurrent++;
+                    }
                   }
                 } else {
-                  card.langCache[targetLang] = null;
-                  failedCount++;
+                  for (const card of group.cards) {
+                    card.langCache[targetLang] = null;
+                    failedCount++;
+                    this.langChangeCurrent++;
+                  }
                 }
               } catch (e) {
-                console.error(`Failed to translate ${card.name}`, e);
-                failedCount++;
+                console.error(
+                  `Failed to translate ${representative.name}`,
+                  e,
+                );
+                for (const card of group.cards) {
+                  failedCount++;
+                  this.langChangeCurrent++;
+                }
               }
               await new Promise((r) => setTimeout(r, 75));
             }
           } catch (e) {
             console.error("Batch language change error", e);
-            batch.forEach(() => failedCount++);
-            this.langChangeCurrent += batch.length;
+            for (const group of batch) {
+              group.cards.forEach(() => {
+                failedCount++;
+                this.langChangeCurrent++;
+              });
+            }
           }
 
           // Delay between batches

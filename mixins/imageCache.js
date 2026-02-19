@@ -402,7 +402,9 @@ export default {
       // Collect all remote image URLs from cards
       const urls = new Set();
       this.cards.forEach((c) => {
-        [c.smallSrc, c.smallBackSrc, c.src, c.backSrc].forEach((u) => {
+        // Only cache display-size images (smallSrc/smallBackSrc).
+        // High-res src/backSrc are only used for PDF and have their own IDB cache.
+        [c.smallSrc, c.smallBackSrc].forEach((u) => {
           if (u && !u.startsWith("data:") && !this.localImages[u]) urls.add(u);
         });
       });
@@ -445,16 +447,6 @@ export default {
             try {
               const dataUrl = await this.downloadThumbnail(url);
               this.localImages[url] = dataUrl;
-              // Backfill into active langCache entries so fast-path restore includes these
-              this.cards.forEach(card => {
-                if (!card.langCache) return;
-                const entry = card.langCache[card.lang];
-                if (entry && entry.localUrls) {
-                  if ([entry.src, entry.smallSrc, entry.backSrc, entry.smallBackSrc].includes(url)) {
-                    entry.localUrls[url] = dataUrl;
-                  }
-                }
-              });
             } catch (e) {
               console.warn("Thumb cache fail:", url, e.message);
             }
