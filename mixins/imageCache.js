@@ -86,6 +86,111 @@ export default {
       });
     },
 
+    // Targeted clear: only removes processed images, preserving thumbnails,
+    // language lookups, version searches, and card data caches.
+    async clearProcessedImages() {
+      const db = await this.initCacheDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("images", "readwrite");
+        const store = tx.objectStore("images");
+        const cursor = store.openCursor();
+        cursor.onsuccess = (e) => {
+          const c = e.target.result;
+          if (c) {
+            const key = c.key;
+            // Keep all prefixed entries (thumb_, lang_, versions_, card_)
+            if (
+              typeof key === "string" &&
+              !key.startsWith("thumb_") &&
+              !key.startsWith("lang_") &&
+              !key.startsWith("versions_") &&
+              !key.startsWith("card_")
+            ) {
+              c.delete();
+            }
+            c.continue();
+          } else {
+            resolve();
+          }
+        };
+        cursor.onerror = (e) => reject(e);
+      });
+    },
+
+    // Eviction: enforce a max cache size (default 500MB).
+    // Deletes the largest processed image entries first until under budget.
+    async evictCacheIfNeeded(maxBytes = 500 * 1024 * 1024) {
+      try {
+        const db = await this.initCacheDB();
+        const tx = db.transaction("images", "readonly");
+        const store = tx.objectStore("images");
+        let totalBytes = 0;
+        const entries = []; // { key, size }
+
+        await new Promise((resolve, reject) => {
+          const cursor = store.openCursor();
+          cursor.onsuccess = (e) => {
+            const c = e.target.result;
+            if (c) {
+              const val = c.value;
+              let size = 0;
+              if (val instanceof Blob) size = val.size;
+              else if (typeof val === "string") size = val.length;
+              else if (val instanceof ArrayBuffer) size = val.byteLength;
+              else if (val && typeof val === "object") size = JSON.stringify(val).length;
+
+              totalBytes += size;
+              // Only consider processed images for eviction (no prefix = processed image)
+              const key = c.key;
+              if (
+                typeof key === "string" &&
+                !key.startsWith("thumb_") &&
+                !key.startsWith("lang_") &&
+                !key.startsWith("versions_") &&
+                !key.startsWith("card_")
+              ) {
+                entries.push({ key, size });
+              }
+              c.continue();
+            } else {
+              resolve();
+            }
+          };
+          cursor.onerror = (e) => reject(e);
+        });
+
+        if (totalBytes <= maxBytes) return; // Under budget, nothing to do
+
+        // Sort by size descending — evict largest first for fastest space reclaim
+        entries.sort((a, b) => b.size - a.size);
+
+        const txDel = db.transaction("images", "readwrite");
+        const storeDel = txDel.objectStore("images");
+        let freed = 0;
+        const target = totalBytes - maxBytes;
+
+        for (const entry of entries) {
+          if (freed >= target) break;
+          storeDel.delete(entry.key);
+          freed += entry.size;
+        }
+
+        await new Promise((resolve) => {
+          txDel.oncomplete = () => resolve();
+          txDel.onerror = () => resolve(); // Non-critical
+        });
+
+        if (freed > 0) {
+          console.info(
+            `Cache eviction: freed ${(freed / 1024 / 1024).toFixed(1)}MB ` +
+            `(${totalBytes / 1024 / 1024 | 0}MB → ${((totalBytes - freed) / 1024 / 1024) | 0}MB)`
+          );
+        }
+      } catch (e) {
+        console.warn("Cache eviction error:", e);
+      }
+    },
+
     // --- Persistent Scryfall Language Lookup ---
     // Checks IDB first, only calls Scryfall if not cached.
     // Caches both hits and misses so the same lookup is never repeated.
@@ -132,6 +237,54 @@ export default {
     async cacheVersions(key, versions) {
       try {
         await this.saveToCache(`versions_${key}`, versions);
+      } catch { /* non-critical */ }
+    },
+
+    // --- Persistent Scryfall Card Data Cache ---
+    // Stores full Scryfall card responses in IDB so re-imports and
+    // token lookups can skip the API call for already-known cards.
+
+    _cardCacheKey(identifier) {
+      if (identifier.set && identifier.collector_number) {
+        return `card_${identifier.set.toLowerCase()}_${identifier.collector_number}`;
+      }
+      if (identifier.name) {
+        return `card_name_${identifier.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      }
+      if (identifier.id) {
+        return `card_id_${identifier.id}`;
+      }
+      return null;
+    },
+
+    // Check IDB cache for multiple identifiers, returns a Map of index → card data
+    async getCardsFromCache(identifiers) {
+      const results = new Map(); // index → scryfall card data
+      const keys = identifiers.map((id, i) => ({ i, key: this._cardCacheKey(id) }));
+      const validKeys = keys.filter((k) => k.key !== null);
+      if (validKeys.length === 0) return results;
+
+      try {
+        const cached = await this.getBatchFromCache(validKeys.map((k) => k.key));
+        for (const { i, key } of validKeys) {
+          const data = cached.get(key);
+          if (data && data.image_status !== "placeholder") {
+            results.set(i, data);
+          }
+        }
+      } catch { /* IDB read error, just miss all */ }
+      return results;
+    },
+
+    // Cache a Scryfall card response under both set/cn key and name key
+    async cacheCardData(card) {
+      if (!card || card.image_status === "placeholder") return;
+      try {
+        const setCnKey = `card_${card.set.toLowerCase()}_${card.collector_number}`;
+        await this.saveToCache(setCnKey, card);
+        // Also cache by name for future name-based lookups
+        const nameKey = `card_name_${card.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        await this.saveToCache(nameKey, card);
       } catch { /* non-critical */ }
     },
 
@@ -433,6 +586,9 @@ export default {
 
     resolveImage(url) {
       if (!url || url.startsWith("data:")) return url;
+      // Touch localImagesVersion to register a reactive dependency,
+      // so the template re-renders when thumbnails finish loading.
+      void this.localImagesVersion;
       return this.localImages[url] || url;
     },
 
@@ -441,19 +597,37 @@ export default {
 
       const cacheKey = `thumb_${url}`;
       const cached = await this.getFromCache(cacheKey);
-      if (cached) return cached;
+      if (cached) {
+        // Convert Blob to data URL for <img> display; legacy string entries pass through
+        if (cached instanceof Blob) {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.readAsDataURL(cached);
+          });
+        }
+        return cached;
+      }
 
-      // Download via loadImage (handles CORS retries) then encode to data URL
+      // Download via loadImage (handles CORS retries) then store as Blob (~33% smaller than base64)
       const img = await this.loadImage(url);
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
 
-      await this.saveToCache(cacheKey, dataUrl);
-      return dataUrl;
+      const blob = await new Promise((res) =>
+        canvas.toBlob(res, "image/jpeg", 0.92),
+      );
+      await this.saveToCache(cacheKey, blob);
+
+      // Return data URL for immediate <img> display
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
     },
 
     async loadLocalImages() {
@@ -480,15 +654,40 @@ export default {
       }
 
       const uncached = [];
+      const blobConversions = [];
       for (let i = 0; i < urlList.length; i++) {
         const url = urlList[i];
         const data = cachedResults.get(cacheKeys[i]);
         if (data) {
-          this.localImages[url] = data;
+          if (data instanceof Blob) {
+            // Queue Blob→dataURL conversion (can't use raw Blobs in <img src>)
+            blobConversions.push(
+              new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  this.localImages[url] = reader.result;
+                  resolve();
+                };
+                reader.onerror = () => {
+                  uncached.push(url); // fallback: re-download
+                  resolve();
+                };
+                reader.readAsDataURL(data);
+              })
+            );
+          } else {
+            // Legacy string (data URL) — use directly
+            this.localImages[url] = data;
+          }
         } else {
           uncached.push(url);
         }
       }
+      // Wait for all Blob conversions to finish
+      if (blobConversions.length > 0) await Promise.all(blobConversions);
+
+      // Notify Vue that IDB-cached thumbnails are now loaded
+      if (cachedResults.size > 0) this.localImagesVersion++;
 
       // Phase 2: Download missing in background (non-blocking)
       if (uncached.length > 0) {
@@ -510,6 +709,8 @@ export default {
             }
           }),
         );
+        // Notify Vue that thumbnails have updated (single batch re-render)
+        this.localImagesVersion++;
         // Breathe between batches
         if (i + BATCH < urls.length) {
           await new Promise((r) => setTimeout(r, 50));
@@ -572,6 +773,7 @@ export default {
       await this.clearCacheDB();
       if (this._processedImgCache) this._processedImgCache.clear();
       this.localImages = {};
+      this.localImagesVersion++;
 
       await this.checkStorageUsage();
       this.statusMessage = "Image cache cleared.";

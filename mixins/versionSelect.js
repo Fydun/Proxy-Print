@@ -18,7 +18,6 @@ export default {
       if (card.set === "CUST" || card.set === "Local") {
         if (!card.customImages.includes(card.src)) {
           card.customImages.unshift(card.src);
-          this.saveSession(); // Save this state so it persists
         }
       }
 
@@ -200,7 +199,6 @@ export default {
         card.backSrc = null;
         card.dfcData = null;
 
-        this.saveSession();
         this.showVersionModal = false;
         this.activeCardIndex = null;
       };
@@ -302,7 +300,6 @@ export default {
         }
       }
 
-      this.saveSession();
       this.loadLocalImages();
       this.showVersionModal = false;
       this.activeCardIndex = null;
@@ -337,7 +334,6 @@ export default {
       if (!isNaN(srcIndex) && srcIndex !== targetIndex) {
         const item = this.cards.splice(srcIndex, 1)[0];
         this.cards.splice(targetIndex, 0, item);
-        this.saveSession();
       }
     },
   },

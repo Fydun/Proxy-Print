@@ -250,7 +250,6 @@ export default {
       }
 
       this.showSortMenu = false;
-      this.saveSession();
     },
   },
 };

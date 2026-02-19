@@ -128,7 +128,7 @@ export default {
         needsFetch.push(card);
       }
 
-      // --- Phase 2: Batch fetch from Scryfall, deduplicated by unique printing ---
+      // --- Phase 2: Fetch from Scryfall, deduplicated + parallelized ---
       // If you have 4x Lightning Bolt (DMR, 123), we only call Scryfall once
       // for that printing instead of 4 times.
       if (needsFetch.length > 0) {
@@ -146,135 +146,140 @@ export default {
         }
 
         const uniquePrintings = Array.from(printGroups.values());
-        const BATCH_SIZE = 75;
 
-        for (let i = 0; i < uniquePrintings.length; i += BATCH_SIZE) {
-          const batch = uniquePrintings.slice(i, i + BATCH_SIZE);
-          const identifiers = batch.map((g) => ({
-            set: g.set,
-            collector_number: g.cn,
-          }));
+        // 2a. Batch IDB cache check — single transaction instead of N serial reads
+        const langCacheKeys = uniquePrintings.map(
+          (g) => `lang_${g.set}_${g.cn}_${targetLang}`,
+        );
+        let cachedLangResults;
+        try {
+          cachedLangResults = await this.getBatchFromCache(langCacheKeys);
+        } catch {
+          cachedLangResults = new Map();
+        }
 
+        // Apply IDB hits immediately, collect network misses
+        const needsNetwork = [];
+        for (let i = 0; i < uniquePrintings.length; i++) {
+          const group = uniquePrintings[i];
+          const cached = cachedLangResults.get(langCacheKeys[i]);
+          if (cached !== undefined) {
+            if (cached && !cached._miss && cached.image_status !== "placeholder") {
+              for (const card of group.cards) {
+                applyCardData(card, cached);
+                updatedCount++;
+                this.langChangeCurrent++;
+              }
+            } else {
+              // Known miss — previously confirmed unavailable in this language
+              for (const card of group.cards) {
+                card.langCache[targetLang] = null;
+                failedCount++;
+                this.langChangeCurrent++;
+              }
+            }
+          } else {
+            needsNetwork.push(group);
+          }
+        }
+
+        // 2b. Parallel Scryfall fetch (4 concurrent — respects ~10 req/s rate limit)
+        const CONCURRENCY = 4;
+        const fallbackGroups = [];
+
+        const fetchLangForGroup = async (group) => {
           try {
             const res = await fetch(
-              "https://api.scryfall.com/cards/collection",
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ identifiers }),
-              },
+              `https://api.scryfall.com/cards/${group.set}/${group.cn}/${targetLang}`,
             );
-            const data = await res.json();
-
-            const foundMap = new Map();
-            if (data.data) {
-              data.data.forEach((c) => {
-                const key = `${c.set.toLowerCase()}_${c.collector_number}`;
-                foundMap.set(key, c);
-              });
-            }
-
-            const fallbackGroups = [];
-            for (const group of batch) {
-              const key = `${group.set}_${group.cn}`;
-              let matchData = foundMap.get(key);
-
-              // One lang endpoint call per unique printing (not per card copy)
-              // Results are persisted in IDB so repeat language switches are instant.
-              if (matchData && matchData.lang !== targetLang) {
-                const langData = await this.fetchScryfallLang(
-                  group.set,
-                  group.cn,
-                  targetLang,
-                );
-                matchData = langData || null;
-                // Only throttle if we actually hit the network
-                // (fetchScryfallLang returns from IDB instantly if cached)
-              }
-
-              if (matchData && matchData.image_status === "placeholder") {
-                matchData = null;
-              }
-
-              if (matchData) {
-                // Apply the single API result to ALL cards with this printing
+            const cacheKey = `lang_${group.set}_${group.cn}_${targetLang}`;
+            if (res.ok) {
+              const data = await res.json();
+              if (data.image_status !== "placeholder") {
+                this.saveToCache(cacheKey, data); // fire-and-forget
                 for (const card of group.cards) {
-                  applyCardData(card, matchData);
+                  applyCardData(card, data);
                   updatedCount++;
                   this.langChangeCurrent++;
                 }
-              } else {
-                fallbackGroups.push(group);
+                return;
               }
             }
+            // Not found or placeholder — cache the miss
+            this.saveToCache(cacheKey, { _miss: true });
+            fallbackGroups.push(group);
+          } catch {
+            fallbackGroups.push(group); // network error → try fallback search
+          }
+        };
 
-            // Fallback search: once per unique printing, applied to all copies
-            for (const group of fallbackGroups) {
-              const representative = group.cards[0];
-              try {
-                let query = `lang:${targetLang} unique:prints`;
-                if (representative.oracle_id) {
-                  query += ` oracle_id:${representative.oracle_id}`;
-                } else {
-                  const cleanName = representative.name
-                    .split(" // ")[0]
-                    .replace(/ \(.*?\)/g, "");
-                  query += ` !"${cleanName}"`;
-                }
+        for (let i = 0; i < needsNetwork.length; i += CONCURRENCY) {
+          const chunk = needsNetwork.slice(i, i + CONCURRENCY);
+          await Promise.all(chunk.map(fetchLangForGroup));
+          // Small gap between chunks to stay well under Scryfall's rate limit
+          if (i + CONCURRENCY < needsNetwork.length) {
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
 
-                const searchRes = await fetch(
-                  `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released`,
-                );
-                if (searchRes.ok) {
-                  const searchData = await searchRes.json();
-                  const match =
-                    searchData.data?.find(
-                      (c) => c.image_status !== "placeholder",
-                    ) || null;
-                  if (match) {
-                    for (const card of group.cards) {
-                      applyCardData(card, match);
-                      updatedCount++;
-                      this.langChangeCurrent++;
-                    }
-                  } else {
-                    for (const card of group.cards) {
-                      card.langCache[targetLang] = null;
-                      failedCount++;
-                      this.langChangeCurrent++;
-                    }
-                  }
-                } else {
-                  for (const card of group.cards) {
-                    card.langCache[targetLang] = null;
-                    failedCount++;
-                    this.langChangeCurrent++;
-                  }
-                }
-              } catch (e) {
-                console.error(
-                  `Failed to translate ${representative.name}`,
-                  e,
-                );
+        // Start thumbnails + high-res caching NOW for cards already switched,
+        // don't wait for the (rare) fallback search path below
+        this.loadLocalImages();
+        this.runPrefetch();
+
+        // 2c. Fallback name search for printings that failed direct lookup
+        const fallbackFetch = async (group) => {
+          const representative = group.cards[0];
+          try {
+            let query = `lang:${targetLang} unique:prints`;
+            if (representative.oracle_id) {
+              query += ` oracle_id:${representative.oracle_id}`;
+            } else {
+              const cleanName = representative.name
+                .split(" // ")[0]
+                .replace(/ \(.*?\)/g, "");
+              query += ` !"${cleanName}"`;
+            }
+
+            const searchRes = await fetch(
+              `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=released`,
+            );
+            if (searchRes.ok) {
+              const searchData = await searchRes.json();
+              const match =
+                searchData.data?.find(
+                  (c) => c.image_status !== "placeholder",
+                ) || null;
+              if (match) {
                 for (const card of group.cards) {
-                  failedCount++;
+                  applyCardData(card, match);
+                  updatedCount++;
                   this.langChangeCurrent++;
                 }
+                return;
               }
-              await new Promise((r) => setTimeout(r, 75));
+            }
+            for (const card of group.cards) {
+              card.langCache[targetLang] = null;
+              failedCount++;
+              this.langChangeCurrent++;
             }
           } catch (e) {
-            console.error("Batch language change error", e);
-            for (const group of batch) {
-              group.cards.forEach(() => {
-                failedCount++;
-                this.langChangeCurrent++;
-              });
+            console.error(`Failed to translate ${representative.name}`, e);
+            for (const card of group.cards) {
+              failedCount++;
+              this.langChangeCurrent++;
             }
           }
+        };
 
-          // Delay between batches
-          await new Promise((r) => setTimeout(r, 100));
+        // Fallback searches also parallelized (2 at a time — search endpoint is heavier)
+        for (let i = 0; i < fallbackGroups.length; i += 2) {
+          const chunk = fallbackGroups.slice(i, i + 2);
+          await Promise.all(chunk.map(fallbackFetch));
+          if (i + 2 < fallbackGroups.length) {
+            await new Promise((r) => setTimeout(r, 100));
+          }
         }
       }
 
@@ -282,6 +287,7 @@ export default {
       this.langChangeCurrent = 0;
       this.saveSession();
       this.loadLocalImages();
+      this.runPrefetch();
 
       if (failedCount > 0) {
         this.statusMessage = `Updated ${updatedCount} card(s) to ${targetLang.toUpperCase()}. ${failedCount} card(s) not available in that language.`;

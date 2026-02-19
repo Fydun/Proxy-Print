@@ -307,7 +307,7 @@ export default {
         }
       }
 
-      // 3. Fetch missing from Scryfall
+      // 3. Fetch missing from Scryfall (with IDB card cache)
       if (fetchQueue.length > 0) {
         const BATCH_SIZE = 75;
         const batches = [];
@@ -321,159 +321,197 @@ export default {
             if (t.type === "specific") {
               return { set: t.set, collector_number: t.cn };
             }
-            // Just send "Fire". Scryfall handles the rest.
             return { name: t.name };
           });
 
+          // Check IDB card cache first — skip API calls for already-known cards
+          let cachedCards;
           try {
-            const response = await fetch(
-              "https://api.scryfall.com/cards/collection",
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ identifiers }),
-              },
-            );
-            const data = await response.json();
+            cachedCards = await this.getCardsFromCache(identifiers);
+          } catch {
+            cachedCards = new Map();
+          }
 
-            if (data.data) {
-              for (let target of batch) {
-                let scryCard = null;
-                if (target.type === "specific") {
-                  scryCard = data.data.find(
-                    (c) =>
-                      c.set.toUpperCase() === target.set &&
-                      c.collector_number === target.cn,
-                  );
-                } else {
-                  // Match response back to target
-                  // Response: "Fire // Ice", Target: "Fire" -> Match
-                  const tName = target.name.toLowerCase();
-                  scryCard = data.data.find((c) => {
-                    const cName = c.name.toLowerCase();
-                    // Check exact match, startswith, or face match
-                    return (
-                      cName === tName ||
-                      cName.startsWith(tName) ||
-                      (c.card_faces &&
-                        c.card_faces[0].name.toLowerCase() === tName)
-                    );
-                  });
+          // Build API batch only for cache-missed cards
+          const uncachedIndices = [];
+          const uncachedIdentifiers = [];
+          for (let i = 0; i < identifiers.length; i++) {
+            if (!cachedCards.has(i)) {
+              uncachedIndices.push(i);
+              uncachedIdentifiers.push(identifiers[i]);
+            }
+          }
+
+          try {
+            // Merge cached + fresh API results into one map
+            const allResults = new Map(cachedCards); // index → card data
+
+            if (uncachedIdentifiers.length > 0) {
+              const response = await fetch(
+                "https://api.scryfall.com/cards/collection",
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ identifiers: uncachedIdentifiers }),
+                },
+              );
+              const data = await response.json();
+
+              if (data.data) {
+                // Cache each response for future imports
+                for (const card of data.data) {
+                  this.cacheCardData(card);
                 }
 
-                if (scryCard) {
-                  target.found = true;
-
-                  // Handle Language (IDB-persistent: same set/cn/lang never fetched twice)
-                  if (target.lang !== "en") {
-                    const langData = await this.fetchScryfallLang(
-                      scryCard.set,
-                      scryCard.collector_number,
-                      target.lang,
+                // Map responses back to original batch indices
+                for (const origIdx of uncachedIndices) {
+                  const target = batch[origIdx];
+                  let scryCard = null;
+                  if (target.type === "specific") {
+                    scryCard = data.data.find(
+                      (c) =>
+                        c.set.toUpperCase() === target.set &&
+                        c.collector_number === target.cn,
                     );
-                    if (langData) scryCard = langData;
-                  }
-
-                  let src = "",
-                    backSrc = null,
-                    smallSrc = "",
-                    smallBackSrc = null;
-
-                  // Image logic
-                  if (
-                    scryCard.card_faces &&
-                    scryCard.card_faces[0].image_uris
-                  ) {
-                    src =
-                      scryCard.card_faces[0].image_uris.png ||
-                      scryCard.card_faces[0].image_uris.large;
-                    smallSrc =
-                      scryCard.card_faces[0].image_uris.small ||
-                      scryCard.card_faces[0].image_uris.normal ||
-                      src;
-                    backSrc =
-                      scryCard.card_faces[1].image_uris?.png ||
-                      scryCard.card_faces[1].image_uris?.large;
-                    smallBackSrc =
-                      scryCard.card_faces[1].image_uris?.small ||
-                      scryCard.card_faces[1].image_uris?.normal ||
-                      backSrc;
                   } else {
-                    src =
-                      scryCard.image_uris?.png || scryCard.image_uris?.large;
-                    smallSrc =
-                      scryCard.image_uris?.small ||
-                      scryCard.image_uris?.normal ||
-                      src;
+                    const tName = target.name.toLowerCase();
+                    scryCard = data.data.find((c) => {
+                      const cName = c.name.toLowerCase();
+                      return (
+                        cName === tName ||
+                        cName.startsWith(tName) ||
+                        (c.card_faces &&
+                          c.card_faces[0].name.toLowerCase() === tName)
+                      );
+                    });
                   }
-
-                  if (src) {
-                    const newCard = {
-                      name: scryCard.name,
-                      set: scryCard.set.toUpperCase(),
-                      setName: scryCard.set_name,
-                      cn: scryCard.collector_number,
-                      src,
-                      smallSrc,
-                      backSrc,
-                      smallBackSrc,
-                      showBack: false,
-                      qty: target.qty,
-                      dfcData: null,
-                      selected: false,
-                      isDuplex: false,
-                      oracle_id: scryCard.oracle_id,
-                      lang: target.lang,
-                      // Metadata
-                      cmc:
-                        scryCard.cmc ??
-                        (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
-                      color: scryCard.colors
-                        ? scryCard.colors.join("")
-                        : scryCard.card_faces
-                          ? (scryCard.card_faces[0].colors || []).join("")
-                          : "",
-                      color_identity: scryCard.color_identity || [],
-                      type_line:
-                        scryCard.type_line ||
-                        (scryCard.card_faces
-                          ? scryCard.card_faces[0].type_line
-                          : ""),
-                    };
-                    if (backSrc) {
-                      newCard.dfcData = { frontSrc: src, backSrc: backSrc };
-                    }
-                    nextCards.push(newCard);
-                  }
+                  if (scryCard) allResults.set(origIdx, scryCard);
                 }
+              }
+
+              // Handle Not Found
+              if (data.not_found && data.not_found.length > 0) {
+                data.not_found.forEach((nf) => {
+                  const isActuallyFound = batch.some(
+                    (t) =>
+                      t.found &&
+                      (nf.name?.toLowerCase().includes(t.name.toLowerCase()) ||
+                        t.name.toLowerCase().includes(nf.name?.toLowerCase())),
+                  );
+
+                  if (!isActuallyFound) {
+                    let name =
+                      nf.name ||
+                      (nf.set
+                        ? `${nf.set} #${nf.collector_number}`
+                        : "Unknown Card");
+                    if (name === "Unknown Card") {
+                      const possibleTarget = batch.find((t) => !t.found);
+                      if (possibleTarget) name = possibleTarget.originalName;
+                    }
+                    this.importErrors.push(name);
+                  }
+                });
               }
             }
 
-            // Handle Not Found
-            if (data.not_found && data.not_found.length > 0) {
-              data.not_found.forEach((nf) => {
-                // Check if we actually found it despite Scryfall complaining (fuzzy match success)
-                const isActuallyFound = batch.some(
-                  (t) =>
-                    t.found &&
-                    (nf.name?.toLowerCase().includes(t.name.toLowerCase()) ||
-                      t.name.toLowerCase().includes(nf.name?.toLowerCase())),
-                );
+            // Process all results (cached + fresh) uniformly
+            for (let idx = 0; idx < batch.length; idx++) {
+              const target = batch[idx];
+              let scryCard = allResults.get(idx);
 
-                if (!isActuallyFound) {
-                  let name =
-                    nf.name ||
-                    (nf.set
-                      ? `${nf.set} #${nf.collector_number}`
-                      : "Unknown Card");
-                  // Fallback: try to find which target caused this error using the cleaned name
-                  if (name === "Unknown Card") {
-                    const possibleTarget = batch.find((t) => !t.found);
-                    if (possibleTarget) name = possibleTarget.originalName;
-                  }
-                  this.importErrors.push(name);
+              if (!scryCard && cachedCards.has(idx)) {
+                scryCard = cachedCards.get(idx);
+              }
+
+              // For cached results, match by target type
+              if (!scryCard && !allResults.has(idx)) continue;
+              if (!scryCard) continue;
+
+              target.found = true;
+
+              // Handle Language (IDB-persistent: same set/cn/lang never fetched twice)
+              if (target.lang !== "en") {
+                const langData = await this.fetchScryfallLang(
+                  scryCard.set,
+                  scryCard.collector_number,
+                  target.lang,
+                );
+                if (langData) scryCard = langData;
+              }
+
+              let src = "",
+                backSrc = null,
+                smallSrc = "",
+                smallBackSrc = null;
+
+              // Image logic
+              if (
+                scryCard.card_faces &&
+                scryCard.card_faces[0].image_uris
+              ) {
+                src =
+                  scryCard.card_faces[0].image_uris.png ||
+                  scryCard.card_faces[0].image_uris.large;
+                smallSrc =
+                  scryCard.card_faces[0].image_uris.small ||
+                  scryCard.card_faces[0].image_uris.normal ||
+                  src;
+                backSrc =
+                  scryCard.card_faces[1].image_uris?.png ||
+                  scryCard.card_faces[1].image_uris?.large;
+                smallBackSrc =
+                  scryCard.card_faces[1].image_uris?.small ||
+                  scryCard.card_faces[1].image_uris?.normal ||
+                  backSrc;
+              } else {
+                src =
+                  scryCard.image_uris?.png || scryCard.image_uris?.large;
+                smallSrc =
+                  scryCard.image_uris?.small ||
+                  scryCard.image_uris?.normal ||
+                  src;
+              }
+
+              if (src) {
+                const newCard = {
+                  name: scryCard.name,
+                  set: scryCard.set.toUpperCase(),
+                  setName: scryCard.set_name,
+                  cn: scryCard.collector_number,
+                  src,
+                  smallSrc,
+                  backSrc,
+                  smallBackSrc,
+                  showBack: false,
+                  qty: target.qty,
+                  dfcData: null,
+                  selected: false,
+                  isDuplex: false,
+                  oracle_id: scryCard.oracle_id,
+                  lang: target.lang,
+                  all_parts: scryCard.all_parts || null,
+                  // Metadata
+                  cmc:
+                    scryCard.cmc ??
+                    (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
+                  color: scryCard.colors
+                    ? scryCard.colors.join("")
+                    : scryCard.card_faces
+                      ? (scryCard.card_faces[0].colors || []).join("")
+                      : "",
+                  color_identity: scryCard.color_identity || [],
+                  type_line:
+                    scryCard.type_line ||
+                    (scryCard.card_faces
+                      ? scryCard.card_faces[0].type_line
+                      : ""),
+                };
+                if (backSrc) {
+                  newCard.dfcData = { frontSrc: src, backSrc: backSrc };
                 }
-              });
+                nextCards.push(newCard);
+              }
             }
           } catch (e) {
             console.error("API Error", e);
