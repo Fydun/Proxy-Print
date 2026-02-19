@@ -168,8 +168,11 @@ export default {
     },
 
     sortCards(key) {
-      // Toggle order if clicking the same header twice
-      if (this.sortState.key === key) {
+      // Build a lightweight fingerprint of the current card order
+      const fingerprint = this.cards.map(c => `${c.name}\0${c.set}\0${c.cn}`).join('|');
+
+      // Only reverse if same sort key AND list hasn't been modified since last sort
+      if (this.sortState.key === key && this._sortFingerprint === fingerprint) {
         this.sortState.order = this.sortState.order === "asc" ? "desc" : "asc";
       } else {
         this.sortState.key = key;
@@ -249,6 +252,8 @@ export default {
       });
       }
 
+      // Snapshot the sorted order so we know if it changes before next sort click
+      this._sortFingerprint = this.cards.map(c => `${c.name}\0${c.set}\0${c.cn}`).join('|');
       this.showSortMenu = false;
     },
   },
