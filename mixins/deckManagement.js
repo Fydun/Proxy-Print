@@ -180,24 +180,16 @@ export default {
               let matchData = foundMap.get(key);
 
               // One lang endpoint call per unique printing (not per card copy)
+              // Results are persisted in IDB so repeat language switches are instant.
               if (matchData && matchData.lang !== targetLang) {
-                try {
-                  const langRes = await fetch(
-                    `https://api.scryfall.com/cards/${group.set}/${group.cn}/${targetLang}`,
-                  );
-                  if (langRes.ok) {
-                    const langData = await langRes.json();
-                    matchData =
-                      langData.image_status !== "placeholder"
-                        ? langData
-                        : null;
-                  } else {
-                    matchData = null;
-                  }
-                  await new Promise((r) => setTimeout(r, 75));
-                } catch {
-                  matchData = null;
-                }
+                const langData = await this.fetchScryfallLang(
+                  group.set,
+                  group.cn,
+                  targetLang,
+                );
+                matchData = langData || null;
+                // Only throttle if we actually hit the network
+                // (fetchScryfallLang returns from IDB instantly if cached)
               }
 
               if (matchData && matchData.image_status === "placeholder") {

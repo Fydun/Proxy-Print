@@ -58,10 +58,20 @@ export default {
       const cacheKey =
         card.oracle_id ||
         card.name.replace(" (Front)", "").replace(" (Back)", "");
+      const fullCacheKey = `${cacheKey}_${this.versionLang}`;
 
-      if (this.versionCache.has(cacheKey) && this.versionLang === "en") {
-        const cached = this.versionCache.get(cacheKey);
-        this.versionList.push(...cached);
+      // 1. In-memory cache (instant)
+      if (this.versionCache.has(fullCacheKey)) {
+        this.versionList.push(...this.versionCache.get(fullCacheKey));
+        this.isFetchingVersions = false;
+        return;
+      }
+
+      // 2. IDB cache (survives page reloads)
+      const idbCached = await this.getCachedVersions(fullCacheKey);
+      if (idbCached) {
+        this.versionCache.set(fullCacheKey, idbCached);
+        this.versionList.push(...idbCached);
         this.isFetchingVersions = false;
         return;
       }
@@ -153,8 +163,9 @@ export default {
             hasMore = false;
           }
         }
-        if (!hasMore && this.versionLang === "en") {
-          this.versionCache.set(cacheKey, accumulatedVersions);
+        if (!hasMore) {
+          this.versionCache.set(fullCacheKey, accumulatedVersions);
+          this.cacheVersions(fullCacheKey, accumulatedVersions);
         }
       } catch (e) {
         console.error("Error fetching versions", e);
@@ -298,7 +309,8 @@ export default {
     },
     onVersionLangChange() {
       if (this.activeCardIndex !== null) {
-        this.versionCache.clear();
+        // Don't clear the whole cache — just re-open, which will check
+        // for cached results for the new language
         this.openVersionSelectModal(this.activeCardIndex, true);
       }
     },

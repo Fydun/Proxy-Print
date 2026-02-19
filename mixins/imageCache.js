@@ -86,6 +86,55 @@ export default {
       });
     },
 
+    // --- Persistent Scryfall Language Lookup ---
+    // Checks IDB first, only calls Scryfall if not cached.
+    // Caches both hits and misses so the same lookup is never repeated.
+    async fetchScryfallLang(set, cn, lang) {
+      const cacheKey = `lang_${set}_${cn}_${lang}`;
+      try {
+        const cached = await this.getFromCache(cacheKey);
+        if (cached !== undefined) {
+          // { _miss: true } = previously checked, not available in this language
+          return cached && cached._miss ? null : cached;
+        }
+      } catch { /* IDB read error, proceed to fetch */ }
+
+      try {
+        const res = await fetch(
+          `https://api.scryfall.com/cards/${set}/${cn}/${lang}`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.image_status !== "placeholder") {
+            await this.saveToCache(cacheKey, data);
+            return data;
+          }
+        }
+        // Not available — cache the miss so we never ask again
+        await this.saveToCache(cacheKey, { _miss: true });
+        return null;
+      } catch {
+        // Network error — don't cache, let them retry later
+        return null;
+      }
+    },
+
+    // --- Persistent Version Search Cache ---
+    // Stores version lists in IDB so re-opening the version picker is instant.
+    async getCachedVersions(key) {
+      try {
+        return await this.getFromCache(`versions_${key}`);
+      } catch {
+        return undefined;
+      }
+    },
+
+    async cacheVersions(key, versions) {
+      try {
+        await this.saveToCache(`versions_${key}`, versions);
+      } catch { /* non-critical */ }
+    },
+
     /* --- Worker Pool for Parallel Image Processing --- */
 
     initWorkerPool() {

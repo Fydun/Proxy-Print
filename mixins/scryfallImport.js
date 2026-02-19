@@ -298,7 +298,6 @@ export default {
       const nextCards = [];
       const fetchQueue = [];
       const usedLocalIds = new Set();
-      const langFetchCache = new Map(); // Dedup: same set/cn/lang fetched only once
 
       // 2. Check against existing cards
       for (let target of targets) {
@@ -410,32 +409,14 @@ export default {
                 if (scryCard) {
                   target.found = true;
 
-                  // Handle Language (deduplicated: same set/cn/lang fetched only once)
+                  // Handle Language (IDB-persistent: same set/cn/lang never fetched twice)
                   if (target.lang !== "en") {
-                    const langKey = `${scryCard.set}/${scryCard.collector_number}/${target.lang}`;
-                    if (langFetchCache.has(langKey)) {
-                      const cached = langFetchCache.get(langKey);
-                      if (cached) scryCard = cached;
-                    } else {
-                      try {
-                        const langRes = await fetch(
-                          `https://api.scryfall.com/cards/${langKey}`,
-                        );
-                        if (langRes.ok) {
-                          const langData = await langRes.json();
-                          if (langData.image_status !== 'placeholder') {
-                            langFetchCache.set(langKey, langData);
-                            scryCard = langData;
-                          } else {
-                            langFetchCache.set(langKey, null);
-                          }
-                        } else {
-                          langFetchCache.set(langKey, null);
-                        }
-                      } catch (e) {
-                        langFetchCache.set(langKey, null);
-                      }
-                    }
+                    const langData = await this.fetchScryfallLang(
+                      scryCard.set,
+                      scryCard.collector_number,
+                      target.lang,
+                    );
+                    if (langData) scryCard = langData;
                   }
 
                   let src = "",
