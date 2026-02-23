@@ -780,6 +780,68 @@
 
           <div class="h-6 w-px bg-gray-300 dark:bg-gray-600"></div>
 
+          <div class="relative group/version">
+            <button
+              class="flex items-center gap-1 text-sm font-medium text-primary dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap"
+            >
+              <app-icon name="version" class="h-4 w-4"></app-icon>
+              Set Version
+            </button>
+            <div
+              class="absolute bottom-full left-1/2 -translate-x-1/2 mb-0 pb-4 w-40 hidden group-hover/version:block z-10"
+            >
+              <div
+                class="bg-surface rounded-lg shadow-xl border border-gray-100 dark:border-gray-600 overflow-hidden"
+              >
+                <button
+                  @click="massChangeVersion('newest')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Newest
+                </button>
+                <button
+                  @click="massChangeVersion('oldest')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Oldest
+                </button>
+                <button
+                  @click="massChangeVersion('default')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Default
+                </button>
+                <div class="h-px bg-gray-200 dark:bg-gray-600"></div>
+                <button
+                  @click="massChangeVersion('full-art')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Full Art
+                </button>
+                <button
+                  @click="massChangeVersion('borderless')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Borderless
+                </button>
+                <button
+                  @click="massChangeVersion('extended-art')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Extended Art
+                </button>
+                <button
+                  @click="massChangeVersion('retro-frame')"
+                  class="block w-full text-left px-4 py-2 text-sm text-primary dark:text-gray-200 hover:bg-secondary dark:hover:bg-gray-700"
+                >
+                  Retro Frame
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="h-6 w-px bg-gray-300 dark:bg-gray-600"></div>
+
           <button
             @click="deleteSelected"
             class="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium flex items-center gap-1"
@@ -904,6 +966,25 @@
           >
           <span class="text-[10px] text-muted"
             >{{ prefetchCurrent }} / {{ prefetchTotal }} (for PDF)</span
+          >
+        </div>
+      </div>
+
+      <!-- Version Change Progress Indicator -->
+      <div
+        v-if="versionChangeTotal > 0 && versionChangeCurrent < versionChangeTotal"
+        class="fixed bottom-4 right-4 bg-surface border border-line p-3 rounded-lg shadow-xl flex items-center gap-3 z-30 animate-bounce-in"
+        :class="{'bottom-20': (langChangeTotal > 0 && langChangeCurrent < langChangeTotal) || (prefetchTotal > 0 && prefetchCurrent < prefetchTotal)}"
+      >
+        <div
+          class="h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"
+        ></div>
+        <div class="flex flex-col">
+          <span class="text-xs font-bold text-primary"
+            >Changing Version</span
+          >
+          <span class="text-[10px] text-muted"
+            >{{ versionChangeCurrent }} / {{ versionChangeTotal }}</span
           >
         </div>
       </div>

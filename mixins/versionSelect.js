@@ -319,6 +319,177 @@ export default {
       }
     },
 
+    /* --- Mass Version Change --- */
+    async massChangeVersion(strategy) {
+      const selectedCards = this.cards.filter(
+        (c) => c.selected && c.set !== "Local" && c.set !== "CUST",
+      );
+      if (selectedCards.length === 0) return;
+
+      // Group by oracle_id (or name) to deduplicate API calls
+      const groups = new Map();
+      for (const card of selectedCards) {
+        const key =
+          card.oracle_id ||
+          card.name.replace(" (Front)", "").replace(" (Back)", "");
+        if (!groups.has(key)) {
+          groups.set(key, { card, cards: [] });
+        }
+        groups.get(key).cards.push(card);
+      }
+
+      this.versionChangeTotal = groups.size;
+      this.versionChangeCurrent = 0;
+
+      const getImg = (c) => {
+        if (c.card_faces && c.card_faces[0].image_uris) {
+          return c.card_faces[0].image_uris.png || c.card_faces[0].image_uris.large;
+        }
+        return c.image_uris?.png || c.image_uris?.large;
+      };
+      const getSmallImg = (c) => {
+        if (c.card_faces && c.card_faces[0].image_uris) {
+          return c.card_faces[0].image_uris.small || c.card_faces[0].image_uris.normal || getImg(c);
+        }
+        return c.image_uris?.small || c.image_uris?.normal || getImg(c);
+      };
+      const getBackImg = (c) => {
+        if (c.card_faces && c.card_faces[1]?.image_uris) {
+          return c.card_faces[1].image_uris.png || c.card_faces[1].image_uris.large;
+        }
+        return null;
+      };
+      const getSmallBackImg = (c) => {
+        if (c.card_faces && c.card_faces[1]?.image_uris) {
+          return c.card_faces[1].image_uris.small || c.card_faces[1].image_uris.normal || getBackImg(c);
+        }
+        return null;
+      };
+
+      const applyVersion = (card, scryCard) => {
+        const src = getImg(scryCard);
+        const smallSrc = getSmallImg(scryCard);
+        const backSrc = getBackImg(scryCard);
+        const smallBackSrc = getSmallBackImg(scryCard);
+        if (!src) return;
+
+        card.set = scryCard.set.toUpperCase();
+        card.setName = scryCard.set_name;
+        card.cn = scryCard.collector_number;
+        card.lang = scryCard.lang || card.lang;
+
+        if (card.isFrontFace || card.isBackFace) {
+          if (card.isBackFace) {
+            card.src = backSrc || src;
+            card.smallSrc = smallBackSrc || smallSrc || card.src;
+          } else {
+            card.src = src;
+            card.smallSrc = smallSrc || card.src;
+          }
+          card.backSrc = null;
+          if (card.dfcData) {
+            card.dfcData.frontSrc = src;
+            card.dfcData.backSrc = backSrc;
+            card.dfcData.originalName = scryCard.name;
+          }
+        } else {
+          card.src = src;
+          card.smallSrc = smallSrc || card.src;
+          if (backSrc) {
+            card.backSrc = backSrc;
+            card.smallBackSrc = smallBackSrc || backSrc;
+            card.dfcData = { frontSrc: src, backSrc, originalName: scryCard.name };
+          } else {
+            card.backSrc = null;
+            card.smallBackSrc = null;
+            card.dfcData = null;
+          }
+        }
+
+        // Update metadata
+        if (scryCard.cmc !== undefined) card.cmc = scryCard.cmc;
+        if (scryCard.colors) card.color = scryCard.colors.join("");
+        else if (scryCard.card_faces) card.color = (scryCard.card_faces[0].colors || []).join("");
+        if (scryCard.color_identity) card.color_identity = scryCard.color_identity;
+        if (scryCard.type_line) card.type_line = scryCard.type_line;
+
+        // Update preferred versions
+        this.preferredVersions[card.dfcData ? card.dfcData.originalName : card.name] = {
+          set: card.set,
+          cn: card.cn,
+          src: card.src,
+          backSrc: card.backSrc,
+          oracle_id: card.oracle_id,
+        };
+      };
+
+      for (const [key, group] of groups) {
+        try {
+          let scryCard = null;
+
+          if (strategy === "default") {
+            // Use /cards/named for Scryfall's default print
+            const searchName = group.card.name
+              .replace(" (Front)", "")
+              .replace(" (Back)", "");
+            const res = await fetch(
+              `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(searchName)}`,
+            );
+            if (res.ok) {
+              const data = await res.json();
+              if (data.image_status !== "placeholder") scryCard = data;
+            }
+          } else {
+            // Use /cards/search with appropriate ordering
+            let query = "";
+            if (group.card.oracle_id) {
+              query = `oracle_id:${group.card.oracle_id} include:extras unique:prints`;
+            } else {
+              const searchName = group.card.name
+                .replace(" (Front)", "")
+                .replace(" (Back)", "");
+              query = `!"${searchName}" include:extras unique:prints`;
+            }
+
+            // Add filters for specialty strategies
+            if (strategy === "full-art") query += " is:full_art";
+            else if (strategy === "borderless") query += " border:borderless";
+            else if (strategy === "extended-art") query += " is:extended_art";
+            else if (strategy === "retro-frame") query += " (frame:1993 or frame:1997)";
+
+            const isOldest = strategy === "oldest";
+            const dir = isOldest ? "asc" : "desc";
+            const encodedQ = encodeURIComponent(query);
+            const url = `https://api.scryfall.com/cards/search?q=${encodedQ}&order=released&dir=${dir}`;
+
+            const res = await fetch(url);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.data && data.data.length > 0) {
+                // Pick the first valid result (skipping placeholders)
+                scryCard = data.data.find((c) => c.image_status !== "placeholder") || null;
+              }
+            }
+          }
+
+          if (scryCard) {
+            for (const card of group.cards) {
+              applyVersion(card, scryCard);
+            }
+          }
+        } catch (e) {
+          console.error(`Error changing version for ${key}:`, e);
+        }
+
+        this.versionChangeCurrent++;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      this.loadLocalImages();
+      this.versionChangeTotal = 0;
+      this.versionChangeCurrent = 0;
+    },
+
     /* --- Card Dragging Logic --- */
     onCardDragStart(e, index) {
       this.draggedCardIndex = index;

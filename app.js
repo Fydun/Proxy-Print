@@ -102,6 +102,8 @@ createApp({
       prefetchCurrent: 0,
       langChangeTotal: 0,
       langChangeCurrent: 0,
+      versionChangeTotal: 0,
+      versionChangeCurrent: 0,
       prefetchRunId: 0,
       localImagesVersion: 0, // Bumped when thumbnails finish loading (triggers re-render)
     };
