@@ -82,7 +82,7 @@ export default {
               @input="$emit('update:importUrl', $event.target.value)"
               @keyup.enter="$emit('import-url')"
               type="text"
-              placeholder="Paste Moxfield URL"
+              placeholder="Paste Moxfield, MTGGoldfish, or MTGTop8 URL"
               class="flex-1 border border-line bg-surface text-primary rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
             />
             <button

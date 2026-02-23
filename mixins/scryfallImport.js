@@ -1,20 +1,13 @@
 // --- Scryfall Import Mixin ---
-// Moxfield URL import, deck text import/sync
+// Moxfield / MTGGoldfish / MTGTop8 URL import, deck text import/sync
 
 export default {
   methods: {
     /**
-     * Import a deck from a Moxfield URL.
+     * Import a deck from a Moxfield, MTGGoldfish, or MTGTop8 URL.
      *
-     * Strategy:
-     *   1. Extract deck ID from URL
-     *   2. Try Moxfield v3 API (api2.moxfield.com) through multiple CORS proxies
-     *   3. Fall back to v2 API (api.moxfield.com) through the same proxies
-     *   4. Parse the JSON and populate the import text area
-     *
-     * Moxfield's API does not set CORS headers, so we must relay through
-     * third-party CORS proxies. These are inherently best-effort; when all
-     * proxies fail the user is directed to paste the list manually.
+     * Detects the source from the URL and delegates to the appropriate fetcher.
+     * All fetchers populate the import text area with "qty name" lines.
      */
     async importDeckFromURL() {
       if (!this.importUrl) return;
@@ -26,37 +19,51 @@ export default {
       const url = this.importUrl.trim();
 
       try {
-        // --- 1. Extract Deck ID ---
-        const deckId = this._extractMoxfieldDeckId(url);
-        if (!deckId) {
+        let lines;
+
+        if (url.includes("mtggoldfish.com")) {
+          lines = await this._importFromMTGGoldfish(url);
+        } else if (url.includes("mtgtop8.com")) {
+          lines = await this._importFromMTGTop8(url);
+        } else if (url.includes("moxfield.com")) {
+          lines = await this._importFromMoxfield(url);
+        } else {
           throw new Error(
-            "Invalid URL — paste a link like moxfield.com/decks/abc123",
+            "Unsupported URL — paste a Moxfield, MTGGoldfish, or MTGTop8 link.",
           );
         }
 
-        // --- 2. Fetch deck JSON via CORS proxies ---
-        const data = await this._fetchMoxfieldDeck(deckId);
-
-        // --- 3. Parse card list from JSON ---
-        const lines = this._parseMoxfieldDeck(data);
-
-        if (lines.length === 0) {
+        if (!lines || lines.length === 0) {
           throw new Error(
             "No cards found — the deck may be empty or private.",
           );
         }
 
-        // --- 4. Populate text area ---
+        // Populate text area
         this.importText = lines.join("\n");
         this.importUrl = "";
         this.importStatus = `Imported ${lines.length} entries.`;
       } catch (err) {
-        console.error("[Moxfield import]", err);
+        console.error("[Deck import]", err);
         this.importIsError = true;
         this.importStatus = err.message;
       } finally {
         this.isFetchingUrl = false;
       }
+    },
+
+    // ─── Moxfield ────────────────────────────────────────────────
+
+    async _importFromMoxfield(url) {
+      const deckId = this._extractMoxfieldDeckId(url);
+      if (!deckId) {
+        throw new Error(
+          "Invalid URL — paste a link like moxfield.com/decks/abc123",
+        );
+      }
+
+      const data = await this._fetchMoxfieldDeck(deckId);
+      return this._parseMoxfieldDeck(data);
     },
 
     /** Pull the deck public-ID from a Moxfield URL. */
@@ -66,80 +73,26 @@ export default {
     },
 
     /**
-     * Try every (API version × CORS proxy) combination until one returns
-     * valid JSON. Throws on total failure.
+     * Try Moxfield API endpoints through proxies until one returns valid JSON.
+     * Tries v3 first, then v2. Throws on total failure.
      */
     async _fetchMoxfieldDeck(deckId) {
-      // Cache-bust appended to the *target* URL so every proxy sees a unique
-      // request and doesn't serve a stale/cached response.
       const ts = Date.now();
-
       const apis = [
-        `https://api2.moxfield.com/v3/decks/all/${deckId}?_t=${ts}`,
-        `https://api.moxfield.com/v2/decks/all/${deckId}?_t=${ts}`,
+        { url: `https://api2.moxfield.com/v3/decks/all/${deckId}?_t=${ts}`, label: "v3" },
+        { url: `https://api.moxfield.com/v2/decks/all/${deckId}?_t=${ts}`, label: "v2" },
       ];
-
-      const proxies = [
-        // corsproxy.io — encoded URL directly after ? (no param name)
-        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-        // allorigins.win — raw passthrough
-        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-        // corsproxy.org — url= parameter style
-        (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
-      ];
-
-      const errors = [];
 
       for (const api of apis) {
-        for (const proxy of proxies) {
-          const proxyUrl = proxy(api);
-          try {
-            this.importStatus = `Trying ${api.includes("v3") ? "v3" : "v2"} API…`;
+        const text = await this._fetchViaProxy(api.url, `Trying Moxfield ${api.label} API…`);
+        if (!text) continue;
 
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 45_000);
-
-            const res = await fetch(proxyUrl, { signal: ctrl.signal });
-            clearTimeout(timer);
-
-            if (res.status === 413) {
-              // Payload too large — deck has too many cards for any free proxy.
-              // Bail immediately with a specific message.
-              throw new Error(
-                "This deck is too large for automatic import. " +
-                  'On Moxfield, click ••• → "Export" → copy the text, then paste it into the text box above.',
-              );
-            }
-
-            if (!res.ok) {
-              errors.push(`HTTP ${res.status}`);
-              continue;
-            }
-
-            const text = await res.text();
-
-            // Reject Cloudflare challenge pages / soft 404s
-            if (this._isBadResponse(text)) {
-              errors.push("Blocked / soft-404");
-              continue;
-            }
-
-            const json = JSON.parse(text); // throws if not JSON
-            // Quick sanity check: a valid deck response has a name
-            if (!json.name) {
-              errors.push("JSON missing 'name'");
-              continue;
-            }
-            return json;
-          } catch (e) {
-            if (e.message.includes("too large")) throw e; // re-throw 413 message
-            errors.push(e.name === "AbortError" ? "Timeout" : e.message);
-          }
-        }
+        try {
+          const json = JSON.parse(text);
+          if (json.name) return json;
+        } catch { /* not valid JSON, try next */ }
       }
 
-      // All attempts failed — give the user a helpful message
-      console.warn("[Moxfield import] All proxy attempts failed:", errors);
       throw new Error(
         "Could not reach Moxfield (CORS proxy issue). " +
           'Try pasting your deck list manually — on Moxfield click ••• → "Export" → copy the text.',
@@ -159,6 +112,180 @@ export default {
       ];
       const head = text.slice(0, 2000);
       return markers.some((m) => head.includes(m));
+    },
+
+    /** Shared CORS proxy list. Each fn takes a target URL and returns a proxied URL. */
+    _corsProxies() {
+      return [
+        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
+      ];
+    },
+
+    /**
+     * Fetch a URL through the CORS proxy cascade. Returns the response text.
+     * @param {string} targetUrl - The actual URL to fetch
+     * @param {string} statusLabel - Shown in importStatus during fetch
+     * @param {number} [timeout=45000] - Abort timeout in ms
+     * @returns {string} response text
+     */
+    async _fetchViaProxy(targetUrl, statusLabel, timeout = 45_000) {
+      const proxies = this._corsProxies();
+      const errors = [];
+
+      for (const proxy of proxies) {
+        const proxyUrl = proxy(targetUrl);
+        try {
+          this.importStatus = statusLabel;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), timeout);
+
+          const res = await fetch(proxyUrl, { signal: ctrl.signal });
+          clearTimeout(timer);
+
+          if (res.status === 413) {
+            throw new Error(
+              "This deck is too large for automatic import. " +
+                "Copy the deck list manually and paste it into the text box above.",
+            );
+          }
+
+          if (!res.ok) {
+            errors.push(`HTTP ${res.status}`);
+            continue;
+          }
+
+          const text = await res.text();
+          if (this._isBadResponse(text)) {
+            errors.push("Blocked / soft-404");
+            continue;
+          }
+
+          return text;
+        } catch (e) {
+          if (e.message.includes("too large")) throw e;
+          errors.push(e.name === "AbortError" ? "Timeout" : e.message);
+        }
+      }
+
+      console.warn("[Proxy fetch] All attempts failed:", errors);
+      return null; // caller decides what to do
+    },
+
+    // ─── MTGGoldfish ─────────────────────────────────────────────
+
+    /**
+     * Import from a MTGGoldfish URL.
+     * Supports /deck/{id} and /archetype/{slug} URLs.
+     */
+    async _importFromMTGGoldfish(url) {
+      let deckId = this._extractGoldfishDeckId(url);
+
+      if (!deckId) {
+        // Archetype page — fetch HTML and extract the deck download link
+        deckId = await this._resolveGoldfishArchetypeDeckId(url);
+      }
+
+      if (!deckId) {
+        throw new Error(
+          "Could not find a deck on this MTGGoldfish page.",
+        );
+      }
+
+      // Fetch the plain-text deck list
+      const ts = Date.now();
+      const downloadUrl = `https://www.mtggoldfish.com/deck/download/${deckId}?_t=${ts}`;
+
+      const text = await this._fetchViaProxy(downloadUrl, "Fetching MTGGoldfish deck…");
+      if (!text) {
+        throw new Error(
+          "Could not reach MTGGoldfish (CORS proxy issue). " +
+            "Try the Download button on MTGGoldfish, then paste the text above.",
+        );
+      }
+
+      return this._parseGoldfishText(text);
+    },
+
+    /** Extract numeric deck ID from /deck/{id} URLs. */
+    _extractGoldfishDeckId(url) {
+      const m = url.match(/mtggoldfish\.com\/deck\/(\d+)/);
+      return m ? m[1] : null;
+    },
+
+    /**
+     * For /archetype/ URLs, fetch the HTML and find the download link
+     * which contains the numeric deck ID.
+     */
+    async _resolveGoldfishArchetypeDeckId(url) {
+      const ts = Date.now();
+      const html = await this._fetchViaProxy(
+        `${url}${url.includes("?") ? "&" : "?"}_t=${ts}`,
+        "Resolving archetype deck…",
+      );
+      if (!html) return null;
+
+      // Look for: href="/deck/download/7593082" or full URL variant
+      const m = html.match(/\/deck\/download\/(\d+)/);
+      return m ? m[1] : null;
+    },
+
+    /**
+     * Parse the plain-text download from MTGGoldfish.
+     * Format: "4 Card Name\n" with blank lines between sections.
+     */
+    _parseGoldfishText(text) {
+      const lines = [];
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Each line is "4 Card Name" — keep as-is since processImport() parses this format
+        if (/^\d+/.test(trimmed)) {
+          lines.push(trimmed);
+        }
+      }
+      return lines;
+    },
+
+    // ─── MTGTop8 ──────────────────────────────────────────────────
+
+    /**
+     * Import from a MTGTop8 URL.
+     * URL format: mtgtop8.com/event?e=80711&d=813461&f=LE
+     * The `d` parameter is the deck ID used for the MTGO text export.
+     */
+    async _importFromMTGTop8(url) {
+      const m = url.match(/[?&]d=(\d+)/);
+      if (!m) {
+        throw new Error(
+          "Could not find a deck ID in this MTGTop8 URL. " +
+            "Make sure the URL contains a 'd' parameter (e.g. ?d=813461).",
+        );
+      }
+      const deckId = m[1];
+
+      // The /mtgo?d= endpoint returns a plain text deck list with no CORS issues
+      // but we still go through proxies in case the user's browser blocks it.
+      const downloadUrl = `https://mtgtop8.com/mtgo?d=${deckId}`;
+      const text = await this._fetchViaProxy(downloadUrl, "Fetching MTGTop8 deck…");
+      if (!text) {
+        throw new Error(
+          "Could not reach MTGTop8 (CORS proxy issue). " +
+            "Try copying the deck list manually from the site.",
+        );
+      }
+
+      // Format: "4 Card Name\n" with "Sideboard" separator line
+      const lines = [];
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.toLowerCase() === "sideboard") continue;
+        if (/^\d+/.test(trimmed)) {
+          lines.push(trimmed);
+        }
+      }
+      return lines;
     },
 
     /**
