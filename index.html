@@ -933,6 +933,12 @@
       <settings-modal
         v-model="showSettingsModal"
         :settings="settings"
+        :bulk-data-status="bulkDataStatus"
+        :bulk-data-card-count="bulkDataCardCount"
+        :bulk-data-progress="bulkDataProgress"
+        :bulk-data-percent="bulkDataPercent"
+        @load-bulk-data="loadBulkDataFile"
+        @unload-bulk-data="unloadBulkData"
       ></settings-modal>
 
       <!-- 4. Preview Modal -->

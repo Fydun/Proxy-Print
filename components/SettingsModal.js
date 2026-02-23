@@ -5,10 +5,10 @@ export default {
     components: { AppIcon },
     
     // We accept 'modelValue' (for v-model visibility) and 'settings' (the data)
-    props: ['modelValue', 'settings'],
+    props: ['modelValue', 'settings', 'bulkDataStatus', 'bulkDataCardCount', 'bulkDataProgress', 'bulkDataPercent'],
     
     // We tell the parent when we want to close
-    emits: ['update:modelValue'],
+    emits: ['update:modelValue', 'load-bulk-data', 'unload-bulk-data'],
     
     data() {
         return {
@@ -29,6 +29,17 @@ export default {
         },
         forceClose() {
             this.$emit('update:modelValue', false);
+        },
+        triggerBulkFileInput() {
+            this.$refs.bulkFileInput?.click();
+        },
+        onBulkFileSelected(e) {
+            const file = e.target.files?.[0];
+            if (file) this.$emit('load-bulk-data', file);
+            e.target.value = '';
+        },
+        unloadBulk() {
+            this.$emit('unload-bulk-data');
         }
     },
 
@@ -140,7 +151,29 @@ export default {
             </div>
           </div>
 
-          <div class="p-6 border-t bg-secondary rounded-b-xl flex justify-end">
+          <div class="p-6 border-t bg-secondary rounded-b-xl flex justify-between items-center">
+            <div class="flex items-center gap-2">
+              <input type="file" ref="bulkFileInput" accept=".json" class="hidden" @change="onBulkFileSelected" />
+              <template v-if="bulkDataStatus === 'loaded'">
+                <span class="text-[10px] text-green-600 dark:text-green-400 font-medium">Bulk data loaded ({{ (bulkDataCardCount || 0).toLocaleString() }} cards)</span>
+                <button @click="unloadBulk" class="text-[10px] text-red-500 hover:text-red-700 dark:hover:text-red-400 underline">Unload</button>
+              </template>
+              <template v-else-if="bulkDataStatus === 'loading'">
+                <div class="flex items-center gap-2 min-w-[180px]">
+                  <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-500 rounded-full transition-all duration-200" :style="{ width: (bulkDataPercent || 0) + '%' }"></div>
+                  </div>
+                  <span class="text-[10px] text-muted whitespace-nowrap">{{ bulkDataProgress }}</span>
+                </div>
+              </template>
+              <template v-else-if="bulkDataStatus === 'error'">
+                <span class="text-[10px] text-red-500">Error: {{ bulkDataProgress }}</span>
+                <button @click="triggerBulkFileInput" class="text-[10px] text-blue-500 hover:text-blue-700 underline">Retry</button>
+              </template>
+              <template v-else>
+                <button @click="triggerBulkFileInput" class="text-[10px] text-muted hover:text-primary underline transition-colors" title="Load Scryfall All Cards JSON for instant offline lookups">Load bulk data…</button>
+              </template>
+            </div>
             <button @click="forceClose" class="px-5 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors">
               Done
             </button>

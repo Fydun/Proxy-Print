@@ -18,6 +18,7 @@ import tokenDfcMixin from "./mixins/tokenDfc.js";
 import versionSelectMixin from "./mixins/versionSelect.js";
 import pdfGenerationMixin from "./mixins/pdfGeneration.js";
 import imageCacheMixin from "./mixins/imageCache.js";
+import bulkDataMixin from "./mixins/bulkData.js";
 
 const { createApp } = Vue;
 
@@ -104,6 +105,13 @@ createApp({
       langChangeCurrent: 0,
       versionChangeTotal: 0,
       versionChangeCurrent: 0,
+
+      // Bulk Data (local Scryfall JSON)
+      bulkDataStatus: "none",    // 'none' | 'loading' | 'loaded' | 'error'
+      bulkDataProgress: "",
+      bulkDataPercent: 0,
+      bulkDataCardCount: 0,
+
       prefetchRunId: 0,
       localImagesVersion: 0, // Bumped when thumbnails finish loading (triggers re-render)
     };
@@ -275,6 +283,8 @@ createApp({
     // and avoid Vue's Proxy overhead for large data structures.
     this.localImages = {};      // url → dataUrl (thumbnails, write-once)
     this.versionCache = new Map(); // fullCacheKey → version list
+    this.bulkByOracleId = {};   // oracle_id → [card, …] (from bulk JSON)
+    this.bulkByName = {};       // lowercase name → [card, …]
   },
   async mounted() {
     //Wait for saved settings to load from IndexedDB
@@ -352,6 +362,7 @@ createApp({
     ...versionSelectMixin.methods,
     ...pdfGenerationMixin.methods,
     ...imageCacheMixin.methods,
+    ...bulkDataMixin.methods,
   },
 }).mount("#app");
 

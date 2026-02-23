@@ -75,6 +75,23 @@ export default {
         return;
       }
 
+      // 3. Bulk data (instant, no network)
+      if (this.hasBulkData()) {
+        const lang = this.versionLang && this.versionLang !== "en" ? this.versionLang : undefined;
+        const bulkVersions = this.bulkBuildVersionList({
+          oracle_id: card.oracle_id,
+          name: card.name,
+          lang,
+        });
+        if (bulkVersions && bulkVersions.length > 0) {
+          this.versionList.push(...bulkVersions);
+          this.versionCache.set(fullCacheKey, bulkVersions);
+          this.cacheVersions(fullCacheKey, bulkVersions);
+          this.isFetchingVersions = false;
+          return;
+        }
+      }
+
       try {
         let query = "";
         if (card.oracle_id) {
@@ -427,6 +444,16 @@ export default {
         try {
           let scryCard = null;
 
+          // --- Fast path: bulk data lookup (no network) ---
+          if (this.hasBulkData()) {
+            scryCard = this.bulkPickVersion(
+              { oracle_id: group.card.oracle_id, name: group.card.name },
+              strategy,
+            );
+          }
+
+          // --- Slow path: Scryfall API ---
+          if (!scryCard) {
           if (strategy === "default") {
             // Use /cards/named for Scryfall's default print
             const searchName = group.card.name
@@ -471,6 +498,7 @@ export default {
               }
             }
           }
+          } // end if (!scryCard) — API fallback
 
           if (scryCard) {
             for (const card of group.cards) {
@@ -482,7 +510,10 @@ export default {
         }
 
         this.versionChangeCurrent++;
-        await new Promise((r) => setTimeout(r, 100));
+        // Skip delay when using bulk data (no rate limit concern)
+        if (!this.hasBulkData()) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
       }
 
       this.loadLocalImages();
