@@ -13,11 +13,17 @@ export default {
     // --- SORTING HELPERS ---
 
     getWUBRGScore(cStr) {
-      if (!cStr || cStr.length === 0) return 999; // Truly Colorless (Wastes, Sol Ring)
+      const raw = Array.isArray(cStr)
+        ? cStr.join("")
+        : cStr === undefined || cStr === null
+          ? ""
+          : String(cStr);
+      const cleaned = raw.toUpperCase().replace(/[^WUBRG]/g, "");
+      if (cleaned.length === 0) return 999; // Truly Colorless (Wastes, Sol Ring)
 
       // Normalize string (e.g., "GW" -> "GW")
       // Note: Scryfall usually pre-sorts these, but we ensure it.
-      const norm = cStr
+      const norm = cleaned
         .split("")
         .sort((a, b) => "WUBRG".indexOf(a) - "WUBRG".indexOf(b))
         .join("");
@@ -71,22 +77,53 @@ export default {
       return 99;
     },
 
+    normalizeCmc(value) {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : 0;
+    },
+
+    ensureOriginalOrder() {
+      let nextIndex = 0;
+      this.cards.forEach((card) => {
+        if (Number.isFinite(card._originalIndex)) {
+          nextIndex = Math.max(nextIndex, card._originalIndex + 1);
+        }
+      });
+
+      this.cards.forEach((card) => {
+        if (!Number.isFinite(card._originalIndex)) {
+          card._originalIndex = nextIndex;
+          nextIndex += 1;
+        }
+      });
+    },
+
     calculateColorRank(card) {
       const type = (card.type_line || "").toLowerCase();
-      const castingColors = card.color || "";
-      const hasCastingColor = castingColors.length > 0;
+      const rawColors = card.color !== undefined ? card.color : card.colors || "";
+      const castingColors = Array.isArray(rawColors)
+        ? rawColors.join("")
+        : rawColors === undefined || rawColors === null
+          ? ""
+          : String(rawColors);
+      const normalizedCasting = castingColors
+        .toUpperCase()
+        .replace(/[^WUBRG]/g, "");
+      const hasCastingColor = normalizedCasting.length > 0;
 
       // Derive Color Identity Signature (Sorted String W->U->B->R->G)
       let identitySignature = "";
       if (card.color_identity && Array.isArray(card.color_identity)) {
         const order = "WUBRG";
         identitySignature = [...card.color_identity]
+          .map((c) => String(c).toUpperCase())
           .sort((a, b) => order.indexOf(a) - order.indexOf(b))
-          .join("");
+          .join("")
+          .replace(/[^WUBRG]/g, "");
       }
 
       let categoryScore = 0;
-      let signature = castingColors;
+      let signature = normalizedCasting;
 
       // 1. COLORED CARDS (Top Priority)
       // Includes Creatures, Instants, Colored Artifacts, and Dryad Arbor
@@ -168,6 +205,7 @@ export default {
     },
 
     sortCards(key) {
+      this.ensureOriginalOrder();
       // Build a lightweight fingerprint of the current card order
       const fingerprint = this.cards.map(c => `${c.name}\0${c.set}\0${c.cn}`).join('|');
 
@@ -183,34 +221,25 @@ export default {
 
       // Auto sort: Cards first, then Color > Type > CMC > Name
       if (key === "auto") {
-        this.cards.sort((a, b) => {
-          // 1. Cards (0) before Tokens/Extras (1)
-          const catA = this.getCardCategory(a);
-          const catB = this.getCardCategory(b);
-          if (catA !== catB) return (catA - catB) * modifier;
-
-          // 2. Color (WUBRG order)
-          const colA = this.calculateColorRank(a);
-          const colB = this.calculateColorRank(b);
-          if (colA !== colB) return (colA - colB) * modifier;
-
-          // 3. Type (Battle > Planeswalker > Creature > ... > Land)
-          const typeA = this.calculateTypeRank(a.type_line);
-          const typeB = this.calculateTypeRank(b.type_line);
-          if (typeA !== typeB) return (typeA - typeB) * modifier;
-
-          // 4. CMC (low to high)
-          const cmcA = a.cmc || 0;
-          const cmcB = b.cmc || 0;
-          if (cmcA !== cmcB) return (cmcA - cmcB) * modifier;
-
-          // 5. Name (alphabetical)
-          const nameA = a.name.toLowerCase();
-          const nameB = b.name.toLowerCase();
-          if (nameA < nameB) return -1 * modifier;
-          if (nameA > nameB) return 1 * modifier;
-
+        const getVal = (card, sortKey) => {
+          if (sortKey === "color") return this.calculateColorRank(card);
+          if (sortKey === "type") return this.calculateTypeRank(card.type_line);
+          if (sortKey === "cmc") return this.normalizeCmc(card.cmc);
+          if (sortKey === "name") return (card.name || "").toLowerCase();
+          if (sortKey === "tokens") return this.getCardCategory(card);
           return 0;
+        };
+
+        const passes = ["name", "color", "cmc", "type", "tokens"];
+        passes.forEach((passKey) => {
+          this.cards.sort((a, b) => {
+            const valA = getVal(a, passKey);
+            const valB = getVal(b, passKey);
+
+            if (valA < valB) return -1 * modifier;
+            if (valA > valB) return 1 * modifier;
+            return 0;
+          });
         });
       } else {
         this.cards.sort((a, b) => {
@@ -227,11 +256,14 @@ export default {
           valA = a.name.toLowerCase();
           valB = b.name.toLowerCase();
         } else if (key === "cmc") {
-          valA = a.cmc || 0;
-          valB = b.cmc || 0;
+          valA = this.normalizeCmc(a.cmc);
+          valB = this.normalizeCmc(b.cmc);
         } else if (key === "dfc") {
-          valA = !!a.backSrc ? 1 : 0;
-          valB = !!b.backSrc ? 1 : 0;
+          valA = !!a.backSrc ? 0 : 1;
+          valB = !!b.backSrc ? 0 : 1;
+        } else if (key === "original") {
+          valA = Number.isFinite(a._originalIndex) ? a._originalIndex : 0;
+          valB = Number.isFinite(b._originalIndex) ? b._originalIndex : 0;
         } else if (key === "tokens") {
           // Use new helper to categorize Cards (0) vs Extras (1)
           valA = this.getCardCategory(a);
