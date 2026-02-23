@@ -20,7 +20,7 @@ export default {
       if (!this.importUrl) return;
 
       this.isFetchingUrl = true;
-      this.errorMessage = "";
+      this.importIsError = false;
       this.importStatus = "Fetching deck…";
 
       const url = this.importUrl.trim();
@@ -52,8 +52,8 @@ export default {
         this.importStatus = `Imported ${lines.length} entries.`;
       } catch (err) {
         console.error("[Moxfield import]", err);
-        this.errorMessage = err.message;
-        this.importStatus = "";
+        this.importIsError = true;
+        this.importStatus = err.message;
       } finally {
         this.isFetchingUrl = false;
       }
@@ -70,20 +70,22 @@ export default {
      * valid JSON. Throws on total failure.
      */
     async _fetchMoxfieldDeck(deckId) {
-      const apis = [
-        `https://api2.moxfield.com/v3/decks/all/${deckId}`,
-        `https://api.moxfield.com/v2/decks/all/${deckId}`,
-      ];
-
-      // Cache-bust to avoid stale proxy results
+      // Cache-bust appended to the *target* URL so every proxy sees a unique
+      // request and doesn't serve a stale/cached response.
       const ts = Date.now();
 
+      const apis = [
+        `https://api2.moxfield.com/v3/decks/all/${deckId}?_t=${ts}`,
+        `https://api.moxfield.com/v2/decks/all/${deckId}?_t=${ts}`,
+      ];
+
       const proxies = [
-        (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}&_t=${ts}`,
-        (u) =>
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}&_t=${ts}`,
-        (u) =>
-          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        // corsproxy.io — encoded URL directly after ? (no param name)
+        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        // allorigins.win — raw passthrough
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        // corsproxy.org — url= parameter style
+        (u) => `https://corsproxy.org/?url=${encodeURIComponent(u)}`,
       ];
 
       const errors = [];
@@ -95,10 +97,19 @@ export default {
             this.importStatus = `Trying ${api.includes("v3") ? "v3" : "v2"} API…`;
 
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 15_000);
+            const timer = setTimeout(() => ctrl.abort(), 45_000);
 
             const res = await fetch(proxyUrl, { signal: ctrl.signal });
             clearTimeout(timer);
+
+            if (res.status === 413) {
+              // Payload too large — deck has too many cards for any free proxy.
+              // Bail immediately with a specific message.
+              throw new Error(
+                "This deck is too large for automatic import. " +
+                  'On Moxfield, click ••• → "Export" → copy the text, then paste it into the text box above.',
+              );
+            }
 
             if (!res.ok) {
               errors.push(`HTTP ${res.status}`);
@@ -121,6 +132,7 @@ export default {
             }
             return json;
           } catch (e) {
+            if (e.message.includes("too large")) throw e; // re-throw 413 message
             errors.push(e.name === "AbortError" ? "Timeout" : e.message);
           }
         }
@@ -174,8 +186,12 @@ export default {
         const bucket = zones[zone];
         if (!bucket || typeof bucket !== "object") continue;
 
-        // Each bucket is { someId: { quantity, card: { name, ... } }, ... }
-        for (const slot of Object.values(bucket)) {
+        // v3 nests cards under bucket.cards; v2 puts them directly on the bucket
+        const cards = bucket.cards ?? bucket;
+
+        // Each entry is { quantity, card: { name, ... } }
+        for (const slot of Object.values(cards)) {
+          if (!slot || typeof slot !== "object") continue;
           const qty = slot.quantity || 1;
           const name = slot.card?.name || slot.name;
           if (name) lines.push(`${qty} ${name}`);

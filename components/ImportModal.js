@@ -10,7 +10,8 @@ export default {
         'isImporting',         // Loading state for processing
         'importStatus',        // Status message text
         'importErrors',        // Array of error messages
-        'detectedCardCount'    // Computed count of cards
+        'detectedCardCount',   // Computed count of cards
+        'importIsError'        // Whether importStatus is an error
     ],
     emits: [
         'update:modelValue',
@@ -119,7 +120,9 @@ export default {
 
             <div
               v-if="importStatus"
-              class="absolute bottom-4 left-6 right-6 p-3 bg-indigo-50 text-indigo-700 rounded-lg text-sm flex items-center gap-3 shadow-sm border border-indigo-100"
+              :class="importIsError
+                ? 'absolute bottom-4 left-6 right-6 p-3 bg-red-50 text-red-700 rounded-lg text-sm flex items-center gap-3 shadow-sm border border-red-200'
+                : 'absolute bottom-4 left-6 right-6 p-3 bg-indigo-50 text-indigo-700 rounded-lg text-sm flex items-center gap-3 shadow-sm border border-indigo-100'"
             >
               <div v-if="isImporting" class="spinner border-indigo-300 border-t-indigo-700 w-4 h-4"></div>
               <span class="font-medium">{{ importStatus }}</span>

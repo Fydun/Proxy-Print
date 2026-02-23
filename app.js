@@ -57,6 +57,7 @@ createApp({
       isFetchingUrl: false,
       isImporting: false,
       importStatus: "",
+      importIsError: false,
       importErrors: [],
 
       // Version Selector
