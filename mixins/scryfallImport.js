@@ -328,6 +328,96 @@ export default {
       return lines;
     },
 
+    /**
+     * Try to resolve a card name via Scryfall fuzzy search.
+     * Works for English names (typo-tolerant) and foreign / printed names.
+     * Returns a Scryfall card object or null.
+     */
+    async _resolveByFuzzyName(name) {
+      try {
+        const res = await fetch(
+          `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`,
+        );
+        if (!res.ok) return null;
+        const card = await res.json();
+        if (card.image_status === "placeholder") return null;
+        return card;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * Build a deck card entry from a Scryfall card object and an import target.
+     * Returns the card object ready for `this.cards`, or null if no image.
+     */
+    _buildCardFromScryfall(scryCard, target) {
+      let src = "",
+        backSrc = null,
+        smallSrc = "",
+        smallBackSrc = null;
+
+      if (scryCard.card_faces && scryCard.card_faces[0].image_uris) {
+        src =
+          scryCard.card_faces[0].image_uris.png ||
+          scryCard.card_faces[0].image_uris.large;
+        smallSrc =
+          scryCard.card_faces[0].image_uris.small ||
+          scryCard.card_faces[0].image_uris.normal ||
+          src;
+        backSrc =
+          scryCard.card_faces[1].image_uris?.png ||
+          scryCard.card_faces[1].image_uris?.large;
+        smallBackSrc =
+          scryCard.card_faces[1].image_uris?.small ||
+          scryCard.card_faces[1].image_uris?.normal ||
+          backSrc;
+      } else {
+        src = scryCard.image_uris?.png || scryCard.image_uris?.large;
+        smallSrc =
+          scryCard.image_uris?.small ||
+          scryCard.image_uris?.normal ||
+          src;
+      }
+
+      if (!src) return null;
+
+      const newCard = {
+        name: scryCard.name,
+        set: scryCard.set.toUpperCase(),
+        setName: scryCard.set_name,
+        cn: scryCard.collector_number,
+        src,
+        smallSrc,
+        backSrc,
+        smallBackSrc,
+        showBack: false,
+        qty: target.qty,
+        dfcData: null,
+        selected: false,
+        isDuplex: false,
+        oracle_id: scryCard.oracle_id,
+        lang: target.lang,
+        all_parts: scryCard.all_parts || null,
+        cmc:
+          scryCard.cmc ??
+          (scryCard.card_faces ? scryCard.card_faces[0].cmc : 0),
+        color: scryCard.colors
+          ? scryCard.colors.join("")
+          : scryCard.card_faces
+            ? (scryCard.card_faces[0].colors || []).join("")
+            : "",
+        color_identity: scryCard.color_identity || [],
+        type_line:
+          scryCard.type_line ||
+          (scryCard.card_faces ? scryCard.card_faces[0].type_line : ""),
+      };
+      if (backSrc) {
+        newCard.dfcData = { frontSrc: src, backSrc: backSrc };
+      }
+      return newCard;
+    },
+
     async processImport() {
       this.isImporting = true;
       this.importStatus = "Analyzing...";
@@ -366,6 +456,7 @@ export default {
             set: match[3].trim().toUpperCase(),
             cn: match[4].trim(),
             lang: match[5] ? match[5].toLowerCase() : "en",
+            langExplicit: !!match[5],
             found: false,
           });
           continue;
@@ -379,6 +470,7 @@ export default {
             name: simplifyName(match[2]), // "Fire // Ice" becomes "Fire"
             originalName: match[2].trim(),
             lang: match[3] ? match[3].toLowerCase() : "en",
+            langExplicit: !!match[3],
             found: false,
           });
         } else {
@@ -388,6 +480,7 @@ export default {
             name: simplifyName(line),
             originalName: line.trim(),
             lang: "en",
+            langExplicit: false,
             found: false,
           });
         }
@@ -660,6 +753,76 @@ export default {
             console.error("API Error", e);
             this.importErrors.push("Network Error - Could not reach Scryfall");
           }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+
+      // 4. Resolve foreign / fuzzy names for cards not found by the batch API
+      const unfoundTargets = fetchQueue.filter((t) => !t.found);
+      if (unfoundTargets.length > 0) {
+        this.importStatus = `Resolving ${unfoundTargets.length} name(s) via search…`;
+
+        for (const target of unfoundTargets) {
+          const fuzzyResult = await this._resolveByFuzzyName(
+            target.originalName || target.name,
+          );
+          if (!fuzzyResult) continue;
+
+          target.found = true;
+          const detectedLang = fuzzyResult.lang;
+
+          // Auto-detect language when the user didn't supply an explicit tag
+          if (!target.langExplicit && detectedLang !== "en") {
+            target.lang = detectedLang;
+          }
+
+          // Remove from importErrors (batch not_found may have added it)
+          const errName = (target.originalName || target.name).toLowerCase();
+          const errIdx = this.importErrors.findIndex(
+            (e) => e.toLowerCase() === errName,
+          );
+          if (errIdx !== -1) this.importErrors.splice(errIdx, 1);
+
+          // Start from the canonical English print so fetchScryfallLang
+          // can resolve the requested language for the best available set.
+          let scryCard = fuzzyResult;
+          if (detectedLang !== "en") {
+            try {
+              const enRes = await fetch(
+                `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(fuzzyResult.name)}`,
+              );
+              if (enRes.ok) {
+                const enCard = await enRes.json();
+                if (enCard.image_status !== "placeholder") {
+                  scryCard = enCard;
+                }
+              }
+            } catch { /* use fuzzyResult as fallback */ }
+            await new Promise((r) => setTimeout(r, 100));
+          }
+
+          // Cache the English card for future imports
+          if (scryCard.lang === "en") this.cacheCardData(scryCard);
+
+          // Fetch the requested language version
+          if (target.lang !== "en") {
+            const langData = await this.fetchScryfallLang(
+              scryCard.set,
+              scryCard.collector_number,
+              target.lang,
+            );
+            if (langData) {
+              scryCard = langData;
+            } else {
+              // fetchScryfallLang failed — fall back to original fuzzy result
+              // if it was already in the target language
+              if (fuzzyResult.lang === target.lang) scryCard = fuzzyResult;
+            }
+          }
+
+          const newCard = this._buildCardFromScryfall(scryCard, target);
+          if (newCard) nextCards.push(newCard);
+
           await new Promise((r) => setTimeout(r, 100));
         }
       }
