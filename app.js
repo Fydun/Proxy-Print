@@ -88,6 +88,7 @@ createApp({
         pageBg: "white",
         bleedMm: 0,
         proxyMarker: false,
+        jpegQuality: 85,
         darkMode: true,
       },
 
@@ -233,6 +234,7 @@ createApp({
             newVal.bleedMm !== oldVal.bleedMm ||
             newVal.pageBg !== oldVal.pageBg ||
             newVal.proxyMarker !== oldVal.proxyMarker ||
+            newVal.jpegQuality !== oldVal.jpegQuality ||
             newVal.cardPreset !== oldVal.cardPreset);
 
         if (visualChanged) {

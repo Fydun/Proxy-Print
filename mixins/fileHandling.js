@@ -73,6 +73,7 @@ export default {
 
       for (let batch of batches) {
         const identifiers = batch.map((f) => ({ name: f.cleanName }));
+        const batchStart = Date.now();
         try {
           const response = await fetch(
             "https://api.scryfall.com/cards/collection",
@@ -190,7 +191,11 @@ export default {
             });
           });
         }
-        await new Promise((r) => setTimeout(r, 100)); // Be nice to API
+        // Only delay if the batch was fast (all from cache); skip if network already provided spacing
+        const elapsed = Date.now() - batchStart;
+        if (elapsed < 100) {
+          await new Promise((r) => setTimeout(r, 100 - elapsed));
+        }
       }
 
       // Start background caching for newly added cards

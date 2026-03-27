@@ -100,6 +100,7 @@ self.onmessage = async (e) => {
       bleed,
       pageBg,
       proxyMarker,
+      jpegQuality,
       scaleFactor,
       cacheKey,
       checkCache,
@@ -179,8 +180,8 @@ self.onmessage = async (e) => {
       context.fillText("PROXY", targetW / 2, targetH - targetH * 0.035);
     }
 
-    // Encode to JPEG (quality 0.85 matches main-thread settings)
-    const blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+    // Encode to JPEG (quality from settings, fallback to 0.85)
+    const blob = await c.convertToBlob({ type: "image/jpeg", quality: jpegQuality || 0.85 });
 
     // Store Blob directly in IDB (~33% smaller than base64 data URL)
     try {

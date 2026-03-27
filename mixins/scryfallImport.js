@@ -73,8 +73,9 @@ export default {
     },
 
     /**
-     * Try Moxfield API endpoints through proxies until one returns valid JSON.
-     * Tries v3 first, then v2. Throws on total failure.
+     * Try Moxfield API endpoints through proxies in parallel.
+     * Both v3 and v2 race simultaneously; first valid JSON wins.
+     * Throws on total failure.
      */
     async _fetchMoxfieldDeck(deckId) {
       const ts = Date.now();
@@ -83,20 +84,23 @@ export default {
         { url: `https://api.moxfield.com/v2/decks/all/${deckId}?_t=${ts}`, label: "v2" },
       ];
 
-      for (const api of apis) {
+      // Race both API versions in parallel
+      const attempts = apis.map(async (api) => {
         const text = await this._fetchViaProxy(api.url, `Trying Moxfield ${api.label} API…`);
-        if (!text) continue;
+        if (!text) throw new Error(`${api.label}: no response`);
+        const json = JSON.parse(text);
+        if (!json.name) throw new Error(`${api.label}: invalid JSON`);
+        return json;
+      });
 
-        try {
-          const json = JSON.parse(text);
-          if (json.name) return json;
-        } catch { /* not valid JSON, try next */ }
+      try {
+        return await Promise.any(attempts);
+      } catch {
+        throw new Error(
+          "Could not reach Moxfield (CORS proxy issue). " +
+            'Try pasting your deck list manually — on Moxfield click ••• → "Export" → copy the text.',
+        );
       }
-
-      throw new Error(
-        "Could not reach Moxfield (CORS proxy issue). " +
-          'Try pasting your deck list manually — on Moxfield click ••• → "Export" → copy the text.',
-      );
     },
 
     /** Detect Cloudflare blocks, Moxfield 404s, and other bad responses. */
@@ -124,7 +128,8 @@ export default {
     },
 
     /**
-     * Fetch a URL through the CORS proxy cascade. Returns the response text.
+     * Fetch a URL through CORS proxies — all proxies race in parallel.
+     * First valid response wins; remaining requests are aborted.
      * @param {string} targetUrl - The actual URL to fetch
      * @param {string} statusLabel - Shown in importStatus during fetch
      * @param {number} [timeout=45000] - Abort timeout in ms
@@ -132,45 +137,61 @@ export default {
      */
     async _fetchViaProxy(targetUrl, statusLabel, timeout = 45_000) {
       const proxies = this._corsProxies();
-      const errors = [];
+      this.importStatus = statusLabel;
 
-      for (const proxy of proxies) {
+      // Each proxy gets its own AbortController so the winner can cancel the rest
+      const controllers = proxies.map(() => new AbortController());
+
+      const attempts = proxies.map((proxy, i) => {
         const proxyUrl = proxy(targetUrl);
-        try {
-          this.importStatus = statusLabel;
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), timeout);
+        const ctrl = controllers[i];
+        const timer = setTimeout(() => ctrl.abort(), timeout);
 
-          const res = await fetch(proxyUrl, { signal: ctrl.signal });
-          clearTimeout(timer);
+        return fetch(proxyUrl, { signal: ctrl.signal })
+          .then(async (res) => {
+            clearTimeout(timer);
 
-          if (res.status === 413) {
-            throw new Error(
-              "This deck is too large for automatic import. " +
-                "Copy the deck list manually and paste it into the text box above.",
-            );
-          }
+            if (res.status === 413) {
+              throw new Error(
+                "This deck is too large for automatic import. " +
+                  "Copy the deck list manually and paste it into the text box above.",
+              );
+            }
 
-          if (!res.ok) {
-            errors.push(`HTTP ${res.status}`);
-            continue;
-          }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-          const text = await res.text();
-          if (this._isBadResponse(text)) {
-            errors.push("Blocked / soft-404");
-            continue;
-          }
+            const text = await res.text();
+            if (this._isBadResponse(text)) throw new Error("Blocked / soft-404");
 
-          return text;
-        } catch (e) {
-          if (e.message.includes("too large")) throw e;
-          errors.push(e.name === "AbortError" ? "Timeout" : e.message);
+            return text;
+          })
+          .catch((e) => {
+            clearTimeout(timer);
+            if (e.message.includes("too large")) throw e;
+            throw e;
+          });
+      });
+
+      try {
+        // First successful response wins
+        const text = await Promise.any(attempts);
+        // Abort remaining in-flight requests
+        controllers.forEach((c) => c.abort());
+        return text;
+      } catch (aggregate) {
+        // All proxies failed — check for the "too large" error
+        if (aggregate.errors) {
+          const tooLarge = aggregate.errors.find((e) =>
+            e.message?.includes("too large"),
+          );
+          if (tooLarge) throw tooLarge;
         }
+        console.warn(
+          "[Proxy fetch] All attempts failed:",
+          aggregate.errors?.map((e) => e.message) || aggregate.message,
+        );
+        return null;
       }
-
-      console.warn("[Proxy fetch] All attempts failed:", errors);
-      return null; // caller decides what to do
     },
 
     // ─── MTGGoldfish ─────────────────────────────────────────────
@@ -397,37 +418,50 @@ export default {
       const fetchQueue = [];
       const usedLocalIds = new Set();
 
-      // 2. Check against existing cards
+      // 2. Check against existing cards — build lookup maps for O(1) matching
+      const customCards = [];
+      const bySetCnLang = new Map();
+      const byNameLang = new Map();
+
+      for (const c of this.cards) {
+        if (c.set === "CUST" || c.set === "Local") {
+          customCards.push(c);
+        }
+        const scnKey = `${c.set}_${c.cn}_${(c.lang || "en")}`;
+        if (!bySetCnLang.has(scnKey)) bySetCnLang.set(scnKey, c);
+
+        const nameLower = c.name.toLowerCase();
+        const lang = c.lang || "en";
+        const nlKey = `${nameLower}_${lang}`;
+        if (!byNameLang.has(nlKey)) byNameLang.set(nlKey, c);
+        // Also index by the first half of split names ("fire // ice" → "fire")
+        const firstHalf = nameLower.split(" // ")[0];
+        if (firstHalf !== nameLower) {
+          const fhKey = `${firstHalf}_${lang}`;
+          if (!byNameLang.has(fhKey)) byNameLang.set(fhKey, c);
+        }
+      }
+
       for (let target of targets) {
         let existingMatch;
-        const customMatch = this.cards.find(
-          (c) =>
-            (c.set === "CUST" || c.set === "Local") &&
-            (c.name.toLowerCase() === target.name.toLowerCase() ||
-              c.name.toLowerCase().startsWith(target.name.toLowerCase())),
+        const tNameLower = target.name.toLowerCase();
+
+        // Custom/local cards — small array, linear scan is fine
+        const customMatch = customCards.find(
+          (c) => {
+            const cName = c.name.toLowerCase();
+            return cName === tNameLower || cName.startsWith(tNameLower);
+          },
         );
 
         if (customMatch) {
           existingMatch = customMatch;
         } else if (target.type === "specific") {
-          existingMatch = this.cards.find(
-            (c) =>
-              c.set === target.set &&
-              c.cn === target.cn &&
-              (c.lang || "en") === target.lang,
+          existingMatch = bySetCnLang.get(
+            `${target.set}_${target.cn}_${target.lang}`,
           );
         } else {
-          // Fuzzy match against existing deck
-          // Check if existing card name STARTS WITH our simplified target name
-          // e.g. Existing: "Fire // Ice", Target: "Fire" -> Match!
-          existingMatch = this.cards.find((c) => {
-            const cName = c.name.toLowerCase();
-            const tName = target.name.toLowerCase();
-            return (
-              (cName === tName || cName.startsWith(tName)) &&
-              (c.lang || "en") === target.lang
-            );
-          });
+          existingMatch = byNameLang.get(`${tNameLower}_${target.lang}`);
         }
 
         if (existingMatch) {
@@ -479,12 +513,43 @@ export default {
           const uncachedIndices = [];
           const uncachedIdentifiers = [];
           for (let i = 0; i < identifiers.length; i++) {
-            if (!cachedCards.has(i)) {
-              uncachedIndices.push(i);
-              uncachedIdentifiers.push(identifiers[i]);
+            if (cachedCards.has(i)) continue;
+
+            // Try bulk data (local Scryfall JSON) before hitting the API
+            if (this.hasBulkData()) {
+              const target = batch[i];
+              const printings = this.bulkLookupPrintings({
+                name: target.name,
+                lang: "en",
+              });
+              if (printings) {
+                let match = null;
+                if (target.type === "specific") {
+                  match = printings.find(
+                    (c) =>
+                      c.set.toUpperCase() === target.set &&
+                      c.collector_number === target.cn,
+                  );
+                }
+                if (!match) {
+                  // Pick newest non-placeholder English printing
+                  match = printings.find(
+                    (c) => c.image_status !== "placeholder" && c.lang === "en",
+                  );
+                }
+                if (match) {
+                  cachedCards.set(i, match);
+                  this.cacheCardData(match); // fire-and-forget: persist to IDB
+                  continue;
+                }
+              }
             }
+
+            uncachedIndices.push(i);
+            uncachedIdentifiers.push(identifiers[i]);
           }
 
+          const batchStart = Date.now();
           try {
             // Merge cached + fresh API results into one map
             const allResults = new Map(cachedCards); // index → card data
@@ -559,6 +624,10 @@ export default {
             }
 
             // Process all results (cached + fresh) uniformly
+            // First pass: collect all language fetch needs, deduplicated by printing
+            const langGroups = new Map(); // "set_cn_lang" → { set, cn, lang, indices: [] }
+            const cardDataByIdx = new Map(); // idx → scryCard
+
             for (let idx = 0; idx < batch.length; idx++) {
               const target = batch[idx];
               let scryCard = allResults.get(idx);
@@ -567,21 +636,51 @@ export default {
                 scryCard = cachedCards.get(idx);
               }
 
-              // For cached results, match by target type
               if (!scryCard && !allResults.has(idx)) continue;
               if (!scryCard) continue;
 
               target.found = true;
+              cardDataByIdx.set(idx, scryCard);
 
-              // Handle Language (IDB-persistent: same set/cn/lang never fetched twice)
               if (target.lang !== "en") {
-                const langData = await this.fetchScryfallLang(
-                  scryCard.set,
-                  scryCard.collector_number,
-                  target.lang,
-                );
-                if (langData) scryCard = langData;
+                const key = `${scryCard.set}_${scryCard.collector_number}_${target.lang}`;
+                if (!langGroups.has(key)) {
+                  langGroups.set(key, {
+                    set: scryCard.set,
+                    cn: scryCard.collector_number,
+                    lang: target.lang,
+                    indices: [],
+                  });
+                }
+                langGroups.get(key).indices.push(idx);
               }
+            }
+
+            // Batch language fetches: deduplicated, 4 concurrent, 100ms gaps
+            if (langGroups.size > 0) {
+              const langEntries = Array.from(langGroups.values());
+              const LANG_CONCURRENCY = 4;
+              for (let li = 0; li < langEntries.length; li += LANG_CONCURRENCY) {
+                const chunk = langEntries.slice(li, li + LANG_CONCURRENCY);
+                const results = await Promise.all(
+                  chunk.map((g) => this.fetchScryfallLang(g.set, g.cn, g.lang)),
+                );
+                results.forEach((langData, ci) => {
+                  if (langData) {
+                    for (const idx of chunk[ci].indices) {
+                      cardDataByIdx.set(idx, langData);
+                    }
+                  }
+                });
+                if (li + LANG_CONCURRENCY < langEntries.length) {
+                  await new Promise((r) => setTimeout(r, 100));
+                }
+              }
+            }
+
+            // Second pass: build card objects from resolved data
+            for (const [idx, scryCard] of cardDataByIdx) {
+              const target = batch[idx];
 
               let src = "",
                 backSrc = null,
@@ -660,7 +759,11 @@ export default {
             console.error("API Error", e);
             this.importErrors.push("Network Error - Could not reach Scryfall");
           }
-          await new Promise((r) => setTimeout(r, 100));
+          // Only delay if the batch was fast (all from cache); skip if network already provided spacing
+          const elapsed = Date.now() - batchStart;
+          if (elapsed < 100) {
+            await new Promise((r) => setTimeout(r, 100 - elapsed));
+          }
         }
       }
 

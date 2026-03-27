@@ -133,6 +133,15 @@ export default {
 
             <div class="grid grid-cols-2 gap-4">
               <div>
+                <label class="block text-sm font-medium text-primary dark:text-gray-300 mb-1">JPEG Quality ({{ settings.jpegQuality }}%)</label>
+                <input type="range" v-model.number="settings.jpegQuality" min="60" max="95" step="5" class="w-full accent-blue-500" />
+                <p class="text-[10px] text-gray-400 mt-1">Lower = smaller PDF, faster. 85 is default.</p>
+              </div>
+              <div></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div>
                 <label class="block text-sm font-medium text-primary dark:text-gray-300 mb-1">Background Fill</label>
                 <select v-model="settings.pageBg" class="w-full border border-line rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-surface text-primary">
                   <option value="white">White</option>

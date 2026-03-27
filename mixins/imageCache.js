@@ -304,7 +304,7 @@ export default {
       }
 
       try {
-        const poolSize = Math.min(navigator.hardwareConcurrency || 4, 8);
+        const poolSize = Math.min(navigator.hardwareConcurrency || 4, 16);
         this._workerPool = [];
         this._workerTaskId = 0;
         this._workerCallbacks = new Map();
@@ -401,7 +401,8 @@ export default {
       const bleed = this.settings.bleedMm || 0;
       const scaleFactor = 12; // 300 DPI
 
-      const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
+      const jpegQuality = (this.settings.jpegQuality || 85) / 100;
+      const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}_${this.settings.jpegQuality}`;
 
       // Skip IDB check when caller (runPrefetch) already verified it's uncached
       if (!skipCacheCheck) {
@@ -421,6 +422,7 @@ export default {
             bleed,
             pageBg: this.settings.pageBg,
             proxyMarker: this.settings.proxyMarker,
+            jpegQuality,
             scaleFactor,
             cacheKey,
             checkCache: false,
@@ -467,7 +469,7 @@ export default {
 
           // Store as Blob (~33% smaller than base64 data URL)
           const blob = await new Promise((res) =>
-            canvas.toBlob(res, "image/jpeg", 0.85),
+            canvas.toBlob(res, "image/jpeg", jpegQuality),
           );
           await this.saveToCache(cacheKey, blob);
         }
@@ -500,22 +502,22 @@ export default {
       const allSources = Array.from(queue);
       const bleed = this.settings.bleedMm || 0;
 
-      // 3. Pre-check which images are already cached (fast IDB lookups)
+      // 3. Pre-check which images are already cached (single batch IDB read)
+      const cacheKeys = allSources.map(
+        (src) => `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}_${this.settings.jpegQuality}`,
+      );
+      let cachedSet;
+      try {
+        cachedSet = await this.getBatchFromCache(cacheKeys);
+      } catch {
+        cachedSet = new Map();
+      }
+      if (this.prefetchRunId !== currentRunId) return;
+
       const uncached = [];
-      let alreadyCached = 0;
-      for (const src of allSources) {
-        if (this.prefetchRunId !== currentRunId) return;
-        const cacheKey = `${src}_${bleed}_${this.settings.pageBg}_${this.settings.proxyMarker}`;
-        try {
-          const exists = await this.getFromCache(cacheKey);
-          if (exists) {
-            alreadyCached++;
-          } else {
-            uncached.push(src);
-          }
-        } catch {
-          uncached.push(src);
-        }
+      for (let i = 0; i < allSources.length; i++) {
+        if (cachedSet.has(cacheKeys[i])) continue;
+        uncached.push(allSources[i]);
       }
 
       // If everything is already cached, no work to do — don't show the indicator
@@ -530,10 +532,12 @@ export default {
       this.prefetchCurrent = 0;
 
       const tasks = uncached.slice(); // Copy so splice doesn't affect original
+      // Use 2× pool size so workers that finish early pick up the next task
+      // instead of waiting for the slowest image in the batch
       const BATCH_SIZE = this._useWorkers
-        ? this._workerPool
-          ? this._workerPool.length
-          : 4
+        ? (this._workerPool
+          ? this._workerPool.length * 2
+          : 8)
         : 4;
 
       const processBatch = async () => {
@@ -575,8 +579,8 @@ export default {
           }),
         );
 
-        // Breathe
-        setTimeout(processBatch, 20);
+        // Brief yield then continue processing
+        setTimeout(processBatch, 5);
       };
 
       processBatch();

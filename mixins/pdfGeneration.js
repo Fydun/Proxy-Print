@@ -274,7 +274,33 @@ export default {
         let totalProcessed = 0; // Track progress
         const failedCards = []; // Track specific failures
 
-        // Process batches
+        // --- Pre-resolve ALL unique images upfront (saturates full worker pool) ---
+        // Collecting unique sources avoids duplicate processing (e.g., 4× same card)
+        const allUniqueSrcs = new Set();
+        printQueue.forEach((c) => {
+          if (c.src) allUniqueSrcs.add(c.src);
+          if (c.backSrc) allUniqueSrcs.add(c.backSrc);
+        });
+        const uniqueSrcArray = Array.from(allUniqueSrcs);
+        const imageDataMap = new Map();
+
+        // Process in chunks of 3× worker pool to keep all workers continuously fed
+        // while leaving headroom for image loading + bitmap creation overlap
+        const RESOLVE_CHUNK = (this._workerPool?.length || 4) * 3;
+        for (let i = 0; i < uniqueSrcArray.length; i += RESOLVE_CHUNK) {
+          const chunk = uniqueSrcArray.slice(i, i + RESOLVE_CHUNK);
+          const results = await this.resolveCardImages(
+            chunk, cardW, cardH, canvas, ctx, currentSettings,
+          );
+          for (let j = 0; j < chunk.length; j++) {
+            if (results[j]) imageDataMap.set(chunk[j], results[j]);
+          }
+          const pct = Math.round(((i + chunk.length) / uniqueSrcArray.length) * 50);
+          this.statusMessage = `Processing images… ${pct}%`;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+
+        // --- Draw pages from the pre-resolved map (no worker idle gaps) ---
         for (let b = 0; b < totalBatches; b++) {
           if (b > 0) doc.addPage();
 
@@ -283,19 +309,6 @@ export default {
             (b + 1) * itemsPerPage,
           );
           let needsBackPage = useDuplex;
-
-          // Yield every batch to let the UI update and GC run
-          await new Promise((r) => setTimeout(r, 0));
-
-          // Pre-resolve all front images in parallel (utilizes full worker pool)
-          const frontImageData = await this.resolveCardImages(
-            batch.map((c) => c.src),
-            cardW,
-            cardH,
-            canvas,
-            ctx,
-            currentSettings,
-          );
 
           // Draw Fronts (sequential write to PDF using pre-resolved data)
           for (let i = 0; i < batch.length; i++) {
@@ -308,9 +321,10 @@ export default {
               const y = startY + row * (cardH + gap);
               const bleed = currentSettings.bleedMm || 0;
 
-              if (frontImageData[i]) {
+              const frontData = imageDataMap.get(card.src);
+              if (frontData) {
                 doc.addImage(
-                  frontImageData[i],
+                  frontData,
                   "JPEG",
                   x - bleed,
                   y - bleed,
@@ -359,13 +373,12 @@ export default {
             // Update Progress Bar
             totalProcessed++;
             const pct = Math.round(
-              (totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) *
-                100,
+              50 + (totalProcessed / (printQueue.length * (needsBackPage ? 2 : 1))) * 50,
             );
-            this.statusMessage = `Generating Page ${b + 1}/${totalBatches} (${pct}%)...`;
+            this.statusMessage = `Drawing Page ${b + 1}/${totalBatches} (${pct}%)…`;
           }
 
-          // Breathe after each front page
+          // Yield to let UI update
           await new Promise((r) => setTimeout(r, 0));
 
           // Draw Backs (Duplex)
@@ -375,17 +388,6 @@ export default {
             if (!hasBacksInBatch) {
               emptyPages.add(doc.internal.getNumberOfPages());
             }
-
-            // Pre-resolve all back images in parallel
-            const backSrcs = batch.map((c) => c.backSrc || null);
-            const backImageData = await this.resolveCardImages(
-              backSrcs,
-              cardW,
-              cardH,
-              canvas,
-              ctx,
-              currentSettings,
-            );
 
             for (let i = 0; i < batch.length; i++) {
               const card = batch[i];
@@ -397,9 +399,10 @@ export default {
                 const y = startY + row * (cardH + gap);
                 const bleed = currentSettings.bleedMm || 0;
 
-                if (backImageData[i]) {
+                const backData = card.backSrc ? imageDataMap.get(card.backSrc) : null;
+                if (backData) {
                   doc.addImage(
-                    backImageData[i],
+                    backData,
                     "JPEG",
                     x - bleed,
                     y - bleed,
@@ -429,7 +432,7 @@ export default {
               }
             }
 
-            // Breathe after each back page
+            // Yield after each back page
             await new Promise((r) => setTimeout(r, 0));
           }
         }
@@ -521,7 +524,7 @@ export default {
 
       // 1. Batch-check IDB cache for all sources in one transaction
       const cacheKeys = sources.map((src) =>
-        src ? `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}` : null,
+        src ? `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}_${settings.jpegQuality}` : null,
       );
       const validKeys = cacheKeys.filter((k) => k !== null);
       let cachedResults;
@@ -556,6 +559,7 @@ export default {
                 bleed,
                 pageBg: settings.pageBg,
                 proxyMarker: settings.proxyMarker,
+                jpegQuality: (settings.jpegQuality || 85) / 100,
                 scaleFactor,
                 cacheKey: cacheKeys[i],
                 checkCache: false,
@@ -600,7 +604,7 @@ export default {
               }
 
               const blob = await new Promise((res) =>
-                fallbackCanvas.toBlob(res, "image/jpeg", 0.85),
+                fallbackCanvas.toBlob(res, "image/jpeg", (settings.jpegQuality || 85) / 100),
               );
               this.saveToCache(cacheKeys[i], blob).catch(() => {});
               return new Uint8Array(await blob.arrayBuffer());
@@ -630,7 +634,7 @@ export default {
         const bleed = settings.bleedMm || 0;
 
         // Create a unique key based on visual settings
-        const cacheKey = `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}`;
+        const cacheKey = `${src}_${bleed}_${settings.pageBg}_${settings.proxyMarker}_${settings.jpegQuality}`;
 
         // Check IDB Cache (stored as Blob for efficiency)
         let croppedData = await this.getFromCache(cacheKey);
@@ -651,6 +655,7 @@ export default {
               bleed,
               pageBg: settings.pageBg,
               proxyMarker: settings.proxyMarker,
+              jpegQuality: (settings.jpegQuality || 85) / 100,
               scaleFactor: 12,
               cacheKey,
               checkCache: false,
@@ -702,7 +707,7 @@ export default {
             }
 
             const blob = await new Promise((res) =>
-              canvas.toBlob(res, "image/jpeg", 0.85),
+              canvas.toBlob(res, "image/jpeg", (settings.jpegQuality || 85) / 100),
             );
             await this.saveToCache(cacheKey, blob);
             croppedData = new Uint8Array(await blob.arrayBuffer());
