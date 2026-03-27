@@ -216,7 +216,7 @@ createApp({
   watch: {
     cards: {
       handler(newCards) {
-        this.saveSession();
+        if (!this._batchMode) this.saveSession();
       },
       deep: true,
     },
@@ -287,6 +287,7 @@ createApp({
     this.versionCache = new Map(); // fullCacheKey → version list
     this.bulkByOracleId = {};   // oracle_id → [card, …] (from bulk JSON)
     this.bulkByName = {};       // lowercase name → [card, …]
+    this._batchMode = false;    // Suppresses autosave during mass operations
   },
   async mounted() {
     //Wait for saved settings to load from IndexedDB

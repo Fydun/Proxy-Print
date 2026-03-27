@@ -602,15 +602,10 @@ export default {
       const cacheKey = `thumb_${url}`;
       const cached = await this.getFromCache(cacheKey);
       if (cached) {
-        // Convert Blob to data URL for <img> display; legacy string entries pass through
         if (cached instanceof Blob) {
-          return new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.readAsDataURL(cached);
-          });
+          return URL.createObjectURL(cached);
         }
-        return cached;
+        return cached; // legacy string
       }
 
       // Download via loadImage (handles CORS retries) then store as Blob (~33% smaller than base64)
@@ -626,12 +621,7 @@ export default {
       );
       await this.saveToCache(cacheKey, blob);
 
-      // Return data URL for immediate <img> display
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
+      return URL.createObjectURL(blob);
     },
 
     async loadLocalImages() {
@@ -658,27 +648,13 @@ export default {
       }
 
       const uncached = [];
-      const blobConversions = [];
       for (let i = 0; i < urlList.length; i++) {
         const url = urlList[i];
         const data = cachedResults.get(cacheKeys[i]);
         if (data) {
           if (data instanceof Blob) {
-            // Queue Blob→dataURL conversion (can't use raw Blobs in <img src>)
-            blobConversions.push(
-              new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  this.localImages[url] = reader.result;
-                  resolve();
-                };
-                reader.onerror = () => {
-                  uncached.push(url); // fallback: re-download
-                  resolve();
-                };
-                reader.readAsDataURL(data);
-              })
-            );
+            // Zero-copy object URL — instant, no base64 encoding overhead
+            this.localImages[url] = URL.createObjectURL(data);
           } else {
             // Legacy string (data URL) — use directly
             this.localImages[url] = data;
@@ -687,8 +663,6 @@ export default {
           uncached.push(url);
         }
       }
-      // Wait for all Blob conversions to finish
-      if (blobConversions.length > 0) await Promise.all(blobConversions);
 
       // Notify Vue that IDB-cached thumbnails are now loaded
       if (cachedResults.size > 0) this.localImagesVersion++;
@@ -700,7 +674,7 @@ export default {
     },
 
     async downloadMissingThumbnails(urls) {
-      const BATCH = 6;
+      const BATCH = 20;
       for (let i = 0; i < urls.length; i += BATCH) {
         const batch = urls.slice(i, i + BATCH);
         await Promise.all(
@@ -715,9 +689,9 @@ export default {
         );
         // Notify Vue that thumbnails have updated (single batch re-render)
         this.localImagesVersion++;
-        // Breathe between batches
+        // Brief yield between batches
         if (i + BATCH < urls.length) {
-          await new Promise((r) => setTimeout(r, 50));
+          await new Promise((r) => setTimeout(r, 10));
         }
       }
     },

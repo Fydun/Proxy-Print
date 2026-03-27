@@ -18,6 +18,8 @@ export default {
       const selectedCards = this.cards.filter((c) => c.selected);
       if (selectedCards.length === 0) return;
 
+      this._batchMode = true;
+
       let updatedCount = 0;
       let failedCount = 0;
       const eligibleCards = selectedCards.filter(c => c.set !== "Local" && c.lang !== targetLang);
@@ -285,6 +287,7 @@ export default {
 
       this.langChangeTotal = 0;
       this.langChangeCurrent = 0;
+      this._batchMode = false;
       this.saveSession();
       this.loadLocalImages();
       this.runPrefetch();

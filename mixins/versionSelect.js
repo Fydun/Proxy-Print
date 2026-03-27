@@ -343,6 +343,8 @@ export default {
       );
       if (selectedCards.length === 0) return;
 
+      this._batchMode = true;
+
       // Group by oracle_id (or name) to deduplicate API calls
       const groups = new Map();
       for (const card of selectedCards) {
@@ -519,6 +521,8 @@ export default {
       this.loadLocalImages();
       this.versionChangeTotal = 0;
       this.versionChangeCurrent = 0;
+      this._batchMode = false;
+      this.saveSession();
     },
 
     /* --- Card Dragging Logic --- */
