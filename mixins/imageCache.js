@@ -385,13 +385,6 @@ export default {
       });
     },
 
-    getPrefetchCanvas() {
-      if (!this._prefetchCanvas) {
-        this._prefetchCanvas = document.createElement("canvas");
-      }
-      return this._prefetchCanvas;
-    },
-
     async processCardToCache(src, { skipCacheCheck = false } = {}) {
       if (!src) return;
 
@@ -531,59 +524,49 @@ export default {
       this.prefetchTotal = uncached.length;
       this.prefetchCurrent = 0;
 
-      const tasks = uncached.slice(); // Copy so splice doesn't affect original
-      // Use 2× pool size so workers that finish early pick up the next task
-      // instead of waiting for the slowest image in the batch
-      const BATCH_SIZE = this._useWorkers
-        ? (this._workerPool
-          ? this._workerPool.length * 2
-          : 8)
+      const tasks = uncached.slice();
+      // Continuous concurrency pool: new tasks start the instant any task
+      // finishes, so workers never sit idle waiting for a straggler.
+      const CONCURRENCY = this._useWorkers
+        ? (this._workerPool ? this._workerPool.length * 2 : 8)
         : 4;
 
-      const processBatch = async () => {
-        // Stop if a new run has started
-        if (this.prefetchRunId !== currentRunId) return;
+      let taskIdx = 0;
 
-        if (this.isGenerating || tasks.length === 0) {
-          if (tasks.length === 0) {
-            // Done
-            setTimeout(() => {
-              // Only reset if we are still the active run
-              if (this.prefetchRunId === currentRunId) {
-                this.prefetchTotal = 0;
-                this.prefetchCurrent = 0;
-              }
-            }, 2000);
+      const runTask = async () => {
+        while (taskIdx < tasks.length) {
+          if (this.prefetchRunId !== currentRunId) return;
+          if (this.isGenerating) return;
+
+          const src = tasks[taskIdx++];
+          try {
+            await Promise.race([
+              this.processCardToCache(src, { skipCacheCheck: true }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Timeout")), 30000),
+              ),
+            ]);
+          } catch (e) {
+            console.warn("Prefetch skip:", src, e.message);
           }
-          return;
+          this.prefetchCurrent++;
         }
-
-        const batch = tasks.splice(0, BATCH_SIZE);
-        await Promise.all(
-          batch.map(async (src) => {
-            // Check again inside loop
-            if (this.prefetchRunId !== currentRunId) return;
-            try {
-              // Race against a 30s timeout to prevent hanging
-              await Promise.race([
-                this.processCardToCache(src, { skipCacheCheck: true }),
-                new Promise((_, reject) =>
-                  setTimeout(() => reject(new Error("Timeout")), 30000),
-                ),
-              ]);
-            } catch (e) {
-              console.warn("Prefetch skip:", src, e.message);
-            } finally {
-              this.prefetchCurrent++;
-            }
-          }),
-        );
-
-        // Brief yield then continue processing
-        setTimeout(processBatch, 5);
       };
 
-      processBatch();
+      // Launch CONCURRENCY parallel runners — each self-replenishes from the shared queue
+      const runners = [];
+      for (let i = 0; i < CONCURRENCY; i++) {
+        runners.push(runTask());
+      }
+
+      Promise.all(runners).then(() => {
+        setTimeout(() => {
+          if (this.prefetchRunId === currentRunId) {
+            this.prefetchTotal = 0;
+            this.prefetchCurrent = 0;
+          }
+        }, 2000);
+      });
     },
 
     /* --- Local Image Cache (Thumbnails + Display Images) --- */
@@ -596,29 +579,26 @@ export default {
       return this.localImages[url] || url;
     },
 
-    async downloadThumbnail(url) {
+    async downloadThumbnail(url, { skipCacheCheck = false } = {}) {
       if (!url || url.startsWith("data:")) return url;
 
       const cacheKey = `thumb_${url}`;
-      const cached = await this.getFromCache(cacheKey);
-      if (cached) {
-        if (cached instanceof Blob) {
-          return URL.createObjectURL(cached);
+
+      // Skip IDB check when caller (downloadMissingThumbnails) already verified via batch read
+      if (!skipCacheCheck) {
+        const cached = await this.getFromCache(cacheKey);
+        if (cached) {
+          if (cached instanceof Blob) {
+            return URL.createObjectURL(cached);
+          }
+          return cached; // legacy string
         }
-        return cached; // legacy string
       }
 
-      // Download via loadImage (handles CORS retries) then store as Blob (~33% smaller than base64)
-      const img = await this.loadImage(url);
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0);
-
-      const blob = await new Promise((res) =>
-        canvas.toBlob(res, "image/jpeg", 0.92),
-      );
+      // Direct fetch — avoids decode→canvas→re-encode overhead since Scryfall serves JPEG
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Thumbnail fetch failed: ${resp.status}`);
+      const blob = await resp.blob();
       await this.saveToCache(cacheKey, blob);
 
       return URL.createObjectURL(blob);
@@ -680,8 +660,11 @@ export default {
         await Promise.all(
           batch.map(async (url) => {
             try {
-              const dataUrl = await this.downloadThumbnail(url);
-              this.localImages[url] = dataUrl;
+              // Revoke previous blob URL if overwriting
+              const old = this.localImages[url];
+              if (typeof old === 'string' && old.startsWith('blob:')) URL.revokeObjectURL(old);
+              const blobUrl = await this.downloadThumbnail(url, { skipCacheCheck: true });
+              this.localImages[url] = blobUrl;
             } catch (e) {
               console.warn("Thumb cache fail:", url, e.message);
             }
@@ -750,6 +733,10 @@ export default {
 
       await this.clearCacheDB();
       if (this._processedImgCache) this._processedImgCache.clear();
+      // Revoke all blob: URLs before dropping references to prevent memory leaks
+      for (const v of Object.values(this.localImages)) {
+        if (typeof v === 'string' && v.startsWith('blob:')) URL.revokeObjectURL(v);
+      }
       this.localImages = {};
       this.localImagesVersion++;
 
